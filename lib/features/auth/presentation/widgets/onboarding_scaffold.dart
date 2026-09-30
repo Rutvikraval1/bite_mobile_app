@@ -14,7 +14,8 @@ class OnboardingScaffold extends StatelessWidget {
     required this.subtitle,
     required this.onSkip,
     required this.onBack,
-    required this.child,
+    required this.body,
+    this.bottomBar,
     this.overlay,
   });
 
@@ -23,76 +24,122 @@ class OnboardingScaffold extends StatelessWidget {
   final String subtitle;
   final VoidCallback onSkip;
   final VoidCallback onBack;
-  final Widget child;
+  final Widget body;
+
+  /// Pinned to the bottom of the screen (typically the Continue button).
+  final Widget? bottomBar;
   final Widget? overlay;
 
   @override
   Widget build(BuildContext context) {
+    // Material ancestor gives Text a default style — without it Flutter
+    // renders every label with the yellow "missing Material" underline.
     return AppSafeArea(
-      child: Stack(
-        children: [
-          SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _StepsIndicator(step: step),
-                    GestureDetector(
-                      onTap: onSkip,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0x0AFFFFFF),
-                          borderRadius: BorderRadius.circular(100),
-                          border: Border.all(color: const Color(0x14FFFFFF)),
-                        ),
-                        child: const Text(
-                          'Skip',
-                          style: TextStyle(
-                            color: Color(0x59FFFFFF),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            fontFamily: 'Inter',
+      child: Material(
+        color: Colors.transparent,
+        child: Stack(
+          children: [
+            SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                16,
+                20,
+                bottomBar == null ? 120 : 190,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _StepsIndicator(step: step),
+                      GestureDetector(
+                        onTap: onSkip,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0x0AFFFFFF),
+                            borderRadius: BorderRadius.circular(100),
+                            border: Border.all(color: const Color(0x14FFFFFF)),
+                          ),
+                          child: const Text(
+                            'Skip',
+                            style: TextStyle(
+                              color: Color(0x59FFFFFF),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              fontFamily: 'Inter',
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: AuthBackButton(onTap: onBack, label: 'Back'),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 26,
-                    fontWeight: FontWeight.w800,
-                    fontFamily: 'Inter',
+                    ],
                   ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  subtitle,
-                  style: const TextStyle(color: AppColors.muted, fontSize: 14),
-                ),
-                const SizedBox(height: 20),
-                child,
-              ],
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: AuthBackButton(onTap: onBack, label: 'Back'),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  body,
+                ],
+              ),
             ),
-          ),
-          ?overlay,
-        ],
+            if (bottomBar != null)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: OnboardingBottomBar(child: bottomBar!),
+              ),
+            ?overlay,
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// Bottom-pinned action area that fades the scrolling content behind it.
+class OnboardingBottomBar extends StatelessWidget {
+  const OnboardingBottomBar({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0x000D0D0D), AppColors.bgDark],
+          stops: [0, 0.35],
+        ),
+      ),
+      child: child,
     );
   }
 }

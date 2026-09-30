@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/config/app_config.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/first_launch_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
@@ -25,6 +26,8 @@ class _WelcomeGateScreenState extends State<WelcomeGateScreen> {
   @override
   void initState() {
     super.initState();
+    // Seen once is enough — even if the app is closed before "Explore".
+    FirstLaunchService.instance.markWelcomeSeen();
     _readyTimer = Timer(const Duration(milliseconds: 300), () {
       if (mounted) setState(() => _ready = true);
     });

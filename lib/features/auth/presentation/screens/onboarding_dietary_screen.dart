@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/toast_service.dart';
 import '../../../../core/services/xp_float_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
@@ -144,8 +145,20 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
     }
   }
 
-  Future<void> _persist() async {
-    await context.read<AuthCubit>().updateProfile({'dietary': _selected});
+  bool _saving = false;
+
+  /// Saves this step to the `profiles` table (insert or update).
+  /// Returns false and shows a toast if the write failed.
+  Future<bool> _persist() async {
+    setState(() => _saving = true);
+    final result = await context.read<AuthCubit>().updateProfile({'dietary': _selected});
+    if (!mounted) return false;
+    setState(() => _saving = false);
+    if (!result.isSuccess) {
+      ToastService.instance.show("⚠️ Couldn't save. Try again.");
+      return false;
+    }
+    return true;
   }
 
   @override
@@ -173,7 +186,7 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
               onClose: () => setState(() => _showSkipAlert = false),
             )
           : null,
-      child: Column(
+      body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (var si = 0; si < _sections.length; si++)
@@ -240,7 +253,12 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+        ],
+      ),
+      bottomBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Text(
             n == 0
                 ? 'Select any dietary needs or preferences'
@@ -267,7 +285,8 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                 : n > 0
                     ? 'Continue ($n selected)'
                     : 'Continue — none apply',
-            enabled: true,
+            enabled: !_saving,
+            loading: _saving,
             gradient: n >= 3
                 ? const [Color(0xFF4CAF50), Color(0xFF66BB6A)]
                 : n >= 2
@@ -277,8 +296,10 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                         : null,
             glow: n >= 2,
             onTap: () async {
-              await _persist();
-              if (mounted) flow.setScreen(AppScreen.onboardingSkill);
+              if (_saving) return;
+              if (await _persist() && mounted) {
+                flow.setScreen(AppScreen.onboardingSkill);
+              }
             },
           ),
           if (_sectionPtsCounts.values.any((c) => c >= 2))

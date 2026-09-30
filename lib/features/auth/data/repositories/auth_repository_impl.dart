@@ -11,7 +11,7 @@ import '../models/profile_mapper.dart';
 /// Supabase-backed [AuthRepository].
 class AuthRepositoryImpl implements AuthRepository {
   AuthRepositoryImpl({SupabaseClientProvider? provider})
-      : _provider = provider ?? SupabaseClientProvider.instance;
+    : _provider = provider ?? SupabaseClientProvider.instance;
 
   final SupabaseClientProvider _provider;
 
@@ -155,6 +155,18 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
+  Future<AuthResult> markOnboarded() async {
+    try {
+      await _auth.updateUser(UserAttributes(data: {'onboarded': true}));
+      return const AuthResult();
+    } on AuthException catch (e) {
+      return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
+    }
+  }
+
+  @override
   Future<ProfileResult> fetchProfile(String userId) async {
     try {
       final res = await _client
@@ -171,6 +183,7 @@ class AuthRepositoryImpl implements AuthRepository {
       return ProfileResult.failure(e.toString());
     }
   }
+
   @override
   Future<ProfileWriteResult> createProfile(
     String userId, {
@@ -181,9 +194,7 @@ class AuthRepositoryImpl implements AuthRepository {
       final row = ProfileMapper.initialMap(userId)
         ..['display_name'] = displayName
         ..['username'] = username;
-      await _client
-          .from(TableNames.profiles)
-          .upsert(row, onConflict: 'id');
+      await _client.from(TableNames.profiles).upsert(row, onConflict: 'id');
       return ProfileWriteResult.ok;
     } catch (e) {
       return ProfileWriteResult(error: e.toString());
@@ -196,10 +207,13 @@ class AuthRepositoryImpl implements AuthRepository {
     Map<String, dynamic> updates,
   ) async {
     try {
-      await _client
-          .from(TableNames.profiles)
-          .update({...updates, 'updated_at': DateTime.now().toUtc().toIso8601String()})
-          .eq('id', userId);
+      // Upsert so the row is created if the signup trigger didn't make one;
+      // otherwise only the given columns are updated.
+      await _client.from(TableNames.profiles).upsert({
+        ...updates,
+        'id': userId,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }, onConflict: 'id');
       return ProfileWriteResult.ok;
     } catch (e) {
       return ProfileWriteResult(error: e.toString());
@@ -215,9 +229,10 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   AuthUser _userFrom(User user) => AuthUser(
-        id: user.id,
-        email: user.email,
-        name: (user.userMetadata?['display_name'] as String?) ?? '',
-        username: (user.userMetadata?['username'] as String?) ?? '',
-      );
+    id: user.id,
+    email: user.email,
+    name: (user.userMetadata?['display_name'] as String?) ?? '',
+    username: (user.userMetadata?['username'] as String?) ?? '',
+    onboarded: user.userMetadata?['onboarded'] == true,
+  );
 }

@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/toast_service.dart';
 import '../../../../core/services/xp_float_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
@@ -141,10 +142,20 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
     return 'Select cuisines to continue';
   }
 
-  Future<void> _persist() async {
-    await context
-        .read<AuthCubit>()
-        .updateProfile({'cuisines': _selected});
+  bool _saving = false;
+
+  /// Saves this step to the `profiles` table (insert or update).
+  /// Returns false and shows a toast if the write failed.
+  Future<bool> _persist() async {
+    setState(() => _saving = true);
+    final result = await context.read<AuthCubit>().updateProfile({'cuisines': _selected});
+    if (!mounted) return false;
+    setState(() => _saving = false);
+    if (!result.isSuccess) {
+      ToastService.instance.show("⚠️ Couldn't save. Try again.");
+      return false;
+    }
+    return true;
   }
 
   Color _selColor(int selIdx, int total) {
@@ -180,7 +191,7 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
               onClose: () => setState(() => _showSkipAlert = false),
             )
           : null,
-      child: Column(
+      body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           GridView.builder(
@@ -303,7 +314,12 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+        ],
+      ),
+      bottomBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           AnimatedDefaultTextStyle(
             duration: const Duration(milliseconds: 300),
             style: TextStyle(
@@ -320,12 +336,15 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
               duration: const Duration(milliseconds: 1800),
               child: AuthPrimaryButton(
                 label: _ctaText,
-                enabled: n >= 3,
+                enabled: !_saving,
+                loading: _saving,
                 gradient: _ctaGradient,
-                glow: n >= 3,
+                glow: true,
                 onTap: () async {
-                  await _persist();
-                  if (mounted) flow.setScreen(AppScreen.onboardingDietary);
+                  if (_saving) return;
+                  if (await _persist() && mounted) {
+                    flow.setScreen(AppScreen.onboardingDietary);
+                  }
                 },
               ),
             )

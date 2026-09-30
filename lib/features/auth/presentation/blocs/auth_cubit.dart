@@ -59,8 +59,10 @@ class AuthCubit extends Cubit<AuthState> {
     if (isClosed || state.user?.id != user.id) return;
     final profile = result.profile;
     if (profile != null) {
-      PremiumGateService.instance
-          .setPremiumState(premium: profile.isPremium, tier: profile.userTier);
+      PremiumGateService.instance.setPremiumState(
+        premium: profile.isPremium,
+        tier: profile.userTier,
+      );
     }
     emit(AuthState(user: user, profile: profile, loading: false));
   }
@@ -97,6 +99,19 @@ class AuthCubit extends Cubit<AuthState> {
 
   Future<AuthResult> deleteAccount() {
     return _repository.deleteAccount();
+  }
+
+  /// Records that signup onboarding is done so the user isn't sent through
+  /// it again on their next login. No-op if already recorded.
+  Future<void> markOnboarded() async {
+    final user = state.user;
+    if (user == null || user.onboarded) return;
+    // Update locally first so repeated calls don't re-send the request.
+    emit(state.copyWith(user: user.copyWith(onboarded: true)));
+    final result = await _repository.markOnboarded();
+    if (result.error != null) {
+      debugPrint('[bite] markOnboarded failed: ${result.error}');
+    }
   }
 
   Future<AuthResult> signOut() {

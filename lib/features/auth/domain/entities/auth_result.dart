@@ -25,10 +25,23 @@ class AuthUser {
     this.email,
     this.name = '',
     this.username = '',
+    this.onboarded = false,
   });
 
   final String id;
   final String? email;
   final String name;
   final String username;
+
+  /// True once the user has finished (or skipped) signup onboarding.
+  /// Stored in Supabase auth user metadata so it follows the account.
+  final bool onboarded;
+
+  AuthUser copyWith({bool? onboarded}) => AuthUser(
+    id: id,
+    email: email,
+    name: name,
+    username: username,
+    onboarded: onboarded ?? this.onboarded,
+  );
 }

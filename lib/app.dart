@@ -6,6 +6,7 @@ import 'core/network/supabase_client_provider.dart';
 import 'core/router/app_screen.dart';
 import 'core/router/flow_cubit.dart';
 import 'core/router/flow_state.dart';
+import 'core/services/first_launch_service.dart';
 import 'core/state/app_state_cubit.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
@@ -136,7 +137,14 @@ class _BiteShellState extends State<BiteShell> {
           create: (_) => ContentCubit(_contentRepository),
         ),
         BlocProvider<AppStateCubit>(create: (_) => AppStateCubit()),
-        BlocProvider<FlowCubit>(create: (_) => FlowCubit()),
+        // First launch opens on the welcome gate; later launches on splash.
+        BlocProvider<FlowCubit>(
+          create: (_) => FlowCubit(
+            initial: FirstLaunchService.instance.isFirstLaunch
+                ? AppScreen.welcome
+                : AppScreen.splash,
+          ),
+        ),
       ],
       child: const _FlowHost(),
     );
@@ -167,7 +175,7 @@ class _FlowHostState extends State<_FlowHost> {
       _wasAuthenticated = true;
       if (!wasAuthed) {
         flow.resetTo(
-          profile == null ? AppScreen.profileSetup : AppScreen.swipeDeck,
+          state.needsOnboarding ? AppScreen.profileSetup : AppScreen.swipeDeck,
         );
       }
     } else if (!state.authenticated) {
@@ -180,10 +188,24 @@ class _FlowHostState extends State<_FlowHost> {
     }
   }
 
+  /// Leaving onboarding for the main app (tutorial finished or "skip all")
+  /// marks the user onboarded so the next login goes straight to home.
+  void _onFlowChanged(BuildContext context, FlowState state) {
+    final auth = context.read<AuthCubit>();
+    if (auth.state.authenticated) auth.markOnboarded();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return BlocListener<AuthCubit, AuthState>(
-      listener: _onAuthChanged,
+    return MultiBlocListener(
+      listeners: [
+        BlocListener<AuthCubit, AuthState>(listener: _onAuthChanged),
+        BlocListener<FlowCubit, FlowState>(
+          listenWhen: (prev, curr) =>
+              prev.screen.isAuthOrOnboarding && !curr.screen.isAuthOrOnboarding,
+          listener: _onFlowChanged,
+        ),
+      ],
       child: BlocBuilder<FlowCubit, FlowState>(
         builder: (context, state) {
           return Stack(

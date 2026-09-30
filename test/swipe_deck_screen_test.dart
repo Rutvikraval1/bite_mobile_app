@@ -45,6 +45,9 @@ class _FakeAuthRepo implements AuthRepository {
   Future<AuthResult> resetPassword(String email) async => const AuthResult();
 
   @override
+  Future<AuthResult> markOnboarded() async => const AuthResult();
+
+  @override
   Future<AuthResult> updatePassword(String newPassword) async =>
       const AuthResult();
 

@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/toast_service.dart';
 import '../../../../core/services/xp_float_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
@@ -87,13 +88,25 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
         .show(pts, x: 20 + (pts % 60).toDouble(), y: 35);
   }
 
-  Future<void> _persist() async {
+  bool _saving = false;
+
+  /// Saves skill + goals to the `profiles` table (insert or update).
+  /// Returns false and shows a toast if the write failed.
+  Future<bool> _persist() async {
     final skill = _skill;
-    if (skill == null) return;
-    await context.read<AuthCubit>().updateProfile({
+    if (skill == null) return true;
+    setState(() => _saving = true);
+    final result = await context.read<AuthCubit>().updateProfile({
       'cooking_skill': skill,
       'cooking_goal': _goals.isEmpty ? null : _goals.join(', '),
     });
+    if (!mounted) return false;
+    setState(() => _saving = false);
+    if (!result.isSuccess) {
+      ToastService.instance.show("⚠️ Couldn't save. Try again.");
+      return false;
+    }
+    return true;
   }
 
   void _toggleGoal(String g) {
@@ -158,14 +171,14 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
               title: 'Skip skill & preferences?',
               warning: "We'll use defaults for difficulty and spice level.",
               onSkipStep: () async {
-                await _persist();
+                if (!await _persist()) return;
                 if (mounted) {
                   setState(() => _showSkipConfirm = false);
                   flow.setScreen(AppScreen.gamificationTutorial);
                 }
               },
               onSkipAll: () async {
-                await _persist();
+                if (!await _persist()) return;
                 if (mounted) {
                   setState(() => _showSkipConfirm = false);
                   flow.skipToHome();
@@ -174,7 +187,7 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
               onClose: () => setState(() => _showSkipConfirm = false),
             )
           : null,
-      child: Column(
+      body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (var i = 0; i < _skillLevels.length; i++) _skillCard(i),
@@ -295,7 +308,12 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
               for (var gi = 0; gi < _goalOptions.length; gi++) _goalChip(gi),
             ],
           ),
-          const SizedBox(height: 20),
+        ],
+      ),
+      bottomBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Text(
             _completeness >= 4
                 ? '🔥 Perfect — your deck will be fire!'
@@ -320,7 +338,8 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
                 : _completeness >= 1
                     ? "Let's Cook! 🍳"
                     : 'Select skill level',
-            enabled: _skill != null,
+            enabled: _skill != null && !_saving,
+            loading: _saving,
             gradient: _completeness >= 4
                 ? const [Color(0xFF4CAF50), Color(0xFF66BB6A)]
                 : _completeness >= 3
@@ -330,8 +349,10 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
                         : null,
             glow: _completeness >= 4,
             onTap: () async {
-              await _persist();
-              if (mounted) flow.setScreen(AppScreen.gamificationTutorial);
+              if (_saving) return;
+              if (await _persist() && mounted) {
+                flow.setScreen(AppScreen.gamificationTutorial);
+              }
             },
           ),
           const SizedBox(height: 8),

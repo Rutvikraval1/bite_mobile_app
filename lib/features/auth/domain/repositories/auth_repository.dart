@@ -26,6 +26,9 @@ abstract interface class AuthRepository {
 
   Future<AuthResult> signOut();
 
+  /// Flags the current user as having completed signup onboarding.
+  Future<AuthResult> markOnboarded();
+
   Future<ProfileResult> fetchProfile(String userId);
 
   Future<ProfileWriteResult> createProfile(

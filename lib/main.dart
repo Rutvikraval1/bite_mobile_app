@@ -6,6 +6,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'app.dart';
 import 'core/config/app_env.dart';
+import 'core/services/first_launch_service.dart';
 import 'core/theme/app_colors.dart';
 
 Future<void> main() async {
@@ -19,6 +20,7 @@ Future<void> main() async {
     debugPrint('[bite] Failed to load .env: $e');
   }
   AppEnv.validate();
+  await FirstLaunchService.instance.load();
   runApp(const BiteApp());
 }
 

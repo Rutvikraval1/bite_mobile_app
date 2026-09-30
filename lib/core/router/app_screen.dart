@@ -66,6 +66,7 @@ extension AppScreenX on AppScreen {
         AppScreen.onboardingDietary ||
         AppScreen.onboardingSkill ||
         AppScreen.splash ||
+        AppScreen.welcome ||
         AppScreen.gamificationTutorial ||
         AppScreen.creatorCreate ||
         AppScreen.cookMode ||

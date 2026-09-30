@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/toast_service.dart';
 import '../../../../core/services/xp_float_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/legal_links.dart';
@@ -12,6 +13,7 @@ import '../../../../core/widgets/animations/loops.dart';
 import '../../../../core/widgets/app_safe_area.dart';
 import '../blocs/auth_cubit.dart';
 import '../widgets/auth_widgets.dart';
+import '../widgets/onboarding_scaffold.dart';
 
 /// Profile setup — name, username, DOB, bio, agreements. Ports `ProfileSetupScreen`.
 class ProfileSetupScreen extends StatefulWidget {
@@ -47,6 +49,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   bool _agreedPrivacy = false;
   bool _shareIntro = false;
   bool _showSkipConfirm = false;
+  bool _saving = false;
   final Set<String> _earnedKeys = {};
 
   @override
@@ -92,15 +95,59 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     return DateTime.now().year - parsed.year;
   }
 
-  Future<void> _persist() async {
-    if (!_isValid) return;
-    await context.read<AuthCubit>().updateProfile({
+  /// Saves the profile to the `profiles` table (insert or update).
+  /// Returns false and shows a toast if the write failed.
+  Future<bool> _persist() async {
+    if (!_isValid) return true;
+    setState(() => _saving = true);
+    final result = await context.read<AuthCubit>().updateProfile({
       'display_name': _name.text.trim(),
       'username': _username.text.trim().replaceFirst('@', ''),
       'dob': _dob,
       'bio': _bio.text.trim(),
       'avatar_emoji': _selectedAvatar ?? '',
     });
+    if (!mounted) return false;
+    setState(() => _saving = false);
+    if (!result.isSuccess) {
+      ToastService.instance.show("⚠️ Couldn't save your profile. Try again.");
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _continue(FlowCubit flow) async {
+    if (_saving) return;
+    if (await _persist() && mounted) {
+      flow.setScreen(AppScreen.onboardingCuisine);
+    }
+  }
+
+  Widget _bottomBar(FlowCubit flow) {
+    return OnboardingBottomBar(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AuthPrimaryButton(
+            label: _saving ? 'Saving…' : 'Continue',
+            enabled: _isValid && !_saving,
+            loading: _saving,
+            onTap: () => _continue(flow),
+            glow: _isValid,
+            gradient: const [AppColors.coral, AppColors.amber],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            !_agreedTerms || !_agreedPrivacy
+                ? 'Please accept both agreements to continue'
+                : 'You can always edit your profile later',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0x40FFFFFF), fontSize: 10),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -113,7 +160,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         child: Stack(
           children: [
             SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 130),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -463,50 +510,27 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  // Continue
-                  AuthPrimaryButton(
-                    label: 'Continue',
-                    enabled: _isValid,
-                    onTap: () async {
-                      await _persist();
-                      if (mounted) flow.setScreen(AppScreen.onboardingCuisine);
-                    },
-                    glow: _isValid,
-                    gradient: const [AppColors.coral, AppColors.amber],
-                  ),
-                  if (!_agreedTerms || !_agreedPrivacy)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6),
-                      child: Text(
-                        'Please accept both agreements to continue',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Color(0x40FFFFFF),
-                          fontSize: 10,
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'You can always edit your profile later',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0x33FFFFFF), fontSize: 11),
-                  ),
                 ],
               ),
+            ),
+            // Continue — pinned to the bottom.
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _bottomBar(flow),
             ),
             if (_showSkipConfirm)
               _SkipConfirm(
                 onSkipStep: () async {
-                  await _persist();
+                  if (!await _persist()) return;
                   if (mounted) {
                     setState(() => _showSkipConfirm = false);
                     flow.setScreen(AppScreen.onboardingCuisine);
                   }
                 },
                 onSkipAll: () async {
-                  await _persist();
+                  if (!await _persist()) return;
                   if (mounted) {
                     setState(() => _showSkipConfirm = false);
                     flow.skipToHome();
