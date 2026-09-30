@@ -88,11 +88,13 @@ class _ShareActionSheetState extends State<ShareActionSheet> {
     }
     ToastService.instance.show(_messages[dest] ?? '📤 Shared!');
     BadgeService.instance.award(const ['first_share']);
+    _closeTimer?.cancel();
     _closeTimer = Timer(const Duration(milliseconds: 1500), _goBack);
   }
 
   void _quickSend(String name) {
     ToastService.instance.show('📨 Sent to $name!');
+    _closeTimer?.cancel();
     _closeTimer = Timer(const Duration(milliseconds: 1500), _goBack);
   }
 

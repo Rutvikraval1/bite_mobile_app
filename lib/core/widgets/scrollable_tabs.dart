@@ -42,6 +42,8 @@ class _ScrollableTabsState extends State<ScrollableTabs> {
     final position = _controller.position;
     final newRight = position.maxScrollExtent - position.pixels > 4;
     final newLeft = position.pixels > 4;
+    // Only rebuild when an edge fade actually toggles, not on every pixel.
+    if (newLeft == _hasLeft && newRight == _hasRight) return;
     setState(() {
       _hasLeft = newLeft;
       _hasRight = newRight;

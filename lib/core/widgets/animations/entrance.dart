@@ -285,9 +285,14 @@ class _CardHeroRevealState extends State<CardHeroReveal>
 
   late final CurvedAnimation _curve =
       CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic);
+  late final Animation<double> _scale =
+      Tween(begin: 0.94, end: 1.0).animate(_curve);
+  late final Animation<double> _blur =
+      Tween(begin: 4.0, end: 0.0).animate(_curve);
 
   @override
   void dispose() {
+    _curve.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -299,13 +304,14 @@ class _CardHeroRevealState extends State<CardHeroReveal>
       child: AnimatedBuilder(
         animation: _controller,
         builder: (context, child) {
+          // Once finished, drop the blur layer entirely — a zero-sigma
+          // ImageFiltered still forces an offscreen pass every frame.
+          if (_controller.isCompleted) return child!;
+          final sigma = _blur.value;
           return Transform.scale(
-            scale: Tween(begin: 0.94, end: 1.0).animate(_curve).value,
+            scale: _scale.value,
             child: ImageFiltered(
-              imageFilter: ui.ImageFilter.blur(
-                sigmaX: Tween(begin: 4.0, end: 0.0).animate(_curve).value,
-                sigmaY: Tween(begin: 4.0, end: 0.0).animate(_curve).value,
-              ),
+              imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
               child: child,
             ),
           );

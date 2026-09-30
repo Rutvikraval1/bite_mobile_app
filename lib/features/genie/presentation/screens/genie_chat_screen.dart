@@ -34,7 +34,7 @@ class _GenieChatScreenState extends State<GenieChatScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
+      if (!mounted || !_scrollController.hasClients) return;
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
         duration: const Duration(milliseconds: 250),
@@ -500,31 +500,33 @@ class _TypingIndicatorState extends State<_TypingIndicator>
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        decoration: BoxDecoration(
-          color: AppColors.amber.withValues(alpha: 0.08),
-          border: Border.all(color: AppColors.amber.withValues(alpha: 0.15)),
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(16),
-            topRight: Radius.circular(16),
-            bottomLeft: Radius.circular(4),
-            bottomRight: Radius.circular(16),
+      child: RepaintBoundary(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          decoration: BoxDecoration(
+            color: AppColors.amber.withValues(alpha: 0.08),
+            border: Border.all(color: AppColors.amber.withValues(alpha: 0.15)),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(4),
+              bottomRight: Radius.circular(16),
+            ),
           ),
-        ),
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, _) {
-            return Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (var i = 0; i < 3; i++) ...[
-                  if (i > 0) const SizedBox(width: 4),
-                  _dot(i),
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < 3; i++) ...[
+                    if (i > 0) const SizedBox(width: 4),
+                    _dot(i),
+                  ],
                 ],
-              ],
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -533,15 +535,13 @@ class _TypingIndicatorState extends State<_TypingIndicator>
   Widget _dot(int i) {
     final t = (_controller.value + i * 0.2) % 1.0;
     final opacity = 0.4 + 0.6 * (0.5 - (t - 0.5).abs()) * 2;
-    return Opacity(
-      opacity: opacity.clamp(0.3, 1.0),
-      child: Container(
-        width: 7,
-        height: 7,
-        decoration: const BoxDecoration(
-          color: AppColors.amber,
-          shape: BoxShape.circle,
-        ),
+    // Alpha baked into the color instead of an Opacity layer per dot.
+    return Container(
+      width: 7,
+      height: 7,
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: opacity.clamp(0.3, 1.0)),
+        shape: BoxShape.circle,
       ),
     );
   }

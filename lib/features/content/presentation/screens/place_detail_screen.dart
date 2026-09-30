@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -13,6 +11,8 @@ import '../../../../core/widgets/app_states.dart';
 import '../../domain/entities/bite_card.dart';
 import '../blocs/content_cubit.dart';
 import '../widgets/social_comments_block.dart';
+import '../../../../core/widgets/app_network_image.dart';
+import '../widgets/sheet_backdrop_blur.dart';
 
 /// Restaurant / place detail sheet — ports `PlaceDetailScreen` from
 /// `screens-detail.jsx`. Reached from the swipe deck when the active card
@@ -118,12 +118,16 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppStateCubit>().state;
+    // Only rebuild when the active card index changes, not on every
+    // AppState update.
+    final activeCardIndex = context.select<AppStateCubit, int>(
+      (c) => c.state.activeCardIndex,
+    );
     final content = context.watch<ContentCubit>().state;
     final deck = content.places;
     final place = deck.isEmpty
         ? null
-        : deck[appState.activeCardIndex % deck.length];
+        : deck[activeCardIndex % deck.length];
 
     if (place == null) {
       return ColoredBox(
@@ -148,8 +152,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
       color: Colors.black.withValues(alpha: 0.6),
       child: GestureDetector(
         onTap: () => context.read<FlowCubit>().goBack(),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: SheetBackdropBlur(
           child: Align(
             alignment: Alignment.bottomCenter,
             child: FractionallySizedBox(
@@ -264,11 +267,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
                 : null,
           ),
           if (place.image != null && place.image!.isNotEmpty)
-            Image.network(
-              place.image!,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => const SizedBox.shrink(),
-            ),
+            AppNetworkImage(place.image!),
           Positioned(
             top: 12,
             right: 16,
@@ -450,8 +449,9 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
               color: AppColors.amber,
               onTap: () {
                 setState(() => _saved = !_saved);
-                if (_saved)
+                if (_saved) {
                   context.read<ContentCubit>().saveItem(place, 'place');
+                }
               },
             ),
           ],
@@ -1073,12 +1073,11 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
                 ),
                 alignment: Alignment.center,
                 child: photo.startsWith('http')
-                    ? Image.network(
+                    ? AppNetworkImage(
                         photo,
-                        fit: BoxFit.cover,
                         width: double.infinity,
                         height: double.infinity,
-                        errorBuilder: (_, _, _) =>
+                        errorBuilder: (_) =>
                             const Text('📷', style: TextStyle(fontSize: 28)),
                       )
                     : Text(photo, style: const TextStyle(fontSize: 32)),

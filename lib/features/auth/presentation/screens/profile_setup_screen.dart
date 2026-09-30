@@ -5,6 +5,8 @@ import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/xp_float_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/legal_links.dart';
+import '../../../../core/widgets/linked_text.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../../../core/widgets/app_safe_area.dart';
@@ -367,15 +369,31 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                   ),
                   const SizedBox(height: 20),
                   _AgreementTile(
-                    title:
-                        "I agree to the Terms of Service and understand that my data will be used in accordance with b🌶te's policies.",
+                    segments: const [
+                      LinkedTextSegment('I agree to the '),
+                      LinkedTextSegment(
+                        'Terms of Service',
+                        onTap: LegalLinks.openTerms,
+                      ),
+                      LinkedTextSegment(
+                        " and understand that my data will be used in accordance with b🌶te's policies.",
+                      ),
+                    ],
                     checked: _agreedTerms,
                     onTap: () => setState(() => _agreedTerms = !_agreedTerms),
                   ),
                   const SizedBox(height: 10),
                   _AgreementTile(
-                    title:
-                        "I have read and agree to the Privacy Policy including data collection and third-party sharing disclosures.",
+                    segments: const [
+                      LinkedTextSegment('I have read and agree to the '),
+                      LinkedTextSegment(
+                        'Privacy Policy',
+                        onTap: LegalLinks.openPrivacyPolicy,
+                      ),
+                      LinkedTextSegment(
+                        ' including data collection and third-party sharing disclosures.',
+                      ),
+                    ],
                     checked: _agreedPrivacy,
                     onTap: () =>
                         setState(() => _agreedPrivacy = !_agreedPrivacy),
@@ -649,12 +667,12 @@ class _DobField extends StatelessWidget {
 
 class _AgreementTile extends StatelessWidget {
   const _AgreementTile({
-    required this.title,
+    required this.segments,
     required this.checked,
     required this.onTap,
   });
 
-  final String title;
+  final List<LinkedTextSegment> segments;
   final bool checked;
   final VoidCallback onTap;
 
@@ -698,13 +716,19 @@ class _AgreementTile extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                title,
+              child: LinkedText(
+                segments: segments,
                 style: TextStyle(
                   color: checked ? const Color(0xB3FFFFFF) : AppColors.muted,
                   fontSize: 12,
                   height: 1.5,
                   fontFamily: 'Inter',
+                ),
+                linkStyle: const TextStyle(
+                  color: AppColors.coral,
+                  fontWeight: FontWeight.w600,
+                  decoration: TextDecoration.underline,
+                  decorationColor: AppColors.coral,
                 ),
               ),
             ),

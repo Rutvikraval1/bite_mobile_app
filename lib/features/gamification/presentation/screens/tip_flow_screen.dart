@@ -370,7 +370,10 @@ class _TipFlowScreenState extends State<TipFlowScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_amountEmoji[amount]!, style: const TextStyle(fontSize: 14)),
+              Text(
+                _amountEmoji[amount] ?? '',
+                style: const TextStyle(fontSize: 14),
+              ),
               const SizedBox(height: 2),
               Text(
                 '\$$amount',

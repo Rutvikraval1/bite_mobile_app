@@ -13,6 +13,9 @@ import '../../../../core/widgets/glass.dart';
 import '../../data/chat_selection.dart';
 import '../../data/mock_social_data.dart';
 
+/// First character of [name] for avatar labels — safe on empty strings.
+String _initial(String name) => name.isEmpty ? '?' : name[0];
+
 /// Messages hub — ports `ChatListScreen` from `screens-social.jsx`.
 /// Reachable via the bottom [FloatingPillNav]; renders full-screen leaving
 /// room for it.
@@ -139,7 +142,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   context.read<FlowCubit>().setScreen(AppScreen.genieChat);
                   return;
                 }
-                _openThread(ChatThreadRef(name: chat.name, avatarLabel: chat.name[0].toUpperCase()));
+                _openThread(ChatThreadRef(name: chat.name, avatarLabel: _initial(chat.name).toUpperCase()));
               },
             ),
           ),
@@ -180,7 +183,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 child: _RequestCard(
                   request: mockChatRequests[i],
                   onAccept: () => _openThread(
-                    ChatThreadRef(name: mockChatRequests[i].name, avatarLabel: mockChatRequests[i].name[0]),
+                    ChatThreadRef(name: mockChatRequests[i].name, avatarLabel: _initial(mockChatRequests[i].name)),
                   ),
                   onDecline: () => setState(() => _requestDismissed.add(i)),
                 ),
@@ -554,7 +557,7 @@ class _ChatRow extends StatelessWidget {
                     : LinearGradient(colors: [AppColors.cyan.withValues(alpha: 0.27), AppColors.coral.withValues(alpha: 0.27)]),
               ),
               alignment: Alignment.center,
-              child: Text(chat.isGenie ? '🧞' : chat.name[0],
+              child: Text(chat.isGenie ? '🧞' : _initial(chat.name),
                   style: TextStyle(fontSize: chat.isGenie ? 18 : 16, color: Colors.white)),
             ),
             const SizedBox(width: 14),

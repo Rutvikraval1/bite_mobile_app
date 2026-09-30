@@ -16,22 +16,31 @@ class XpFloatOverlay extends StatefulWidget {
 class _XpFloatOverlayState extends State<XpFloatOverlay> {
   StreamSubscription<XpFloat>? _sub;
   final List<_ActiveFloat> _active = [];
+  final Set<Timer> _timers = {};
 
   @override
   void initState() {
     super.initState();
     _sub = XpFloatService.instance.stream.listen((float) {
+      if (!mounted) return;
       final entry = _ActiveFloat(float);
       setState(() => _active.add(entry));
-      Timer(const Duration(milliseconds: 1900), () {
+      late final Timer timer;
+      timer = Timer(const Duration(milliseconds: 1900), () {
+        _timers.remove(timer);
         if (mounted) setState(() => _active.remove(entry));
       });
+      _timers.add(timer);
     });
   }
 
   @override
   void dispose() {
     _sub?.cancel();
+    for (final t in _timers) {
+      t.cancel();
+    }
+    _timers.clear();
     super.dispose();
   }
 
@@ -88,8 +97,11 @@ class _FloatingXpPillState extends State<_FloatingXpPill>
   late final CurvedAnimation _curve =
       CurvedAnimation(parent: _controller, curve: Curves.easeOut);
 
+  late final Animation<double> _fade = ReverseAnimation(_curve);
+
   @override
   void dispose() {
+    _curve.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -103,16 +115,14 @@ class _FloatingXpPillState extends State<_FloatingXpPill>
         animation: _controller,
         builder: (context, child) {
           final dy = -(80 * _curve.value);
-          final opacity = 1 - _curve.value;
-          return Opacity(
-            opacity: opacity.clamp(0.0, 1.0),
-            child: Transform.translate(
-              offset: Offset(0, dy),
-              child: child,
-            ),
+          return Transform.translate(
+            offset: Offset(0, dy),
+            child: child,
           );
         },
-        child: Container(
+        child: FadeTransition(
+          opacity: _fade,
+          child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: AppColors.amber.withValues(alpha: 0.16),
@@ -127,6 +137,7 @@ class _FloatingXpPillState extends State<_FloatingXpPill>
               fontWeight: FontWeight.w800,
               color: AppColors.amber,
             ),
+          ),
           ),
         ),
       ),

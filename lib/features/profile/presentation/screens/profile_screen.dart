@@ -36,11 +36,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Scaffold(
       backgroundColor: AppColors.bgDark,
       body: SafeArea(
+        // buildWhen: only rebuild this long screen for the fields it reads.
         child: BlocBuilder<AuthCubit, AuthState>(
+          buildWhen: (p, c) => p.profile != c.profile,
           builder: (context, auth) {
             return BlocBuilder<AppStateCubit, AppState>(
+              buildWhen: (p, c) =>
+                  p.xp != c.xp || p.userBadges != c.userBadges || p.streakCount != c.streakCount,
               builder: (context, appState) {
                 return BlocBuilder<ContentCubit, ContentState>(
+                  buildWhen: (p, c) => p.savedItems.length != c.savedItems.length,
                   builder: (context, content) {
                     return _buildBody(context, auth.profile, appState, content.savedItems.length);
                   },

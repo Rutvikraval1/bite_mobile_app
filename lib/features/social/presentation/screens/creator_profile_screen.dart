@@ -12,6 +12,7 @@ import '../../../../core/widgets/avatar_img.dart';
 import '../../../../core/widgets/glass.dart';
 import '../../../content/data/image_urls.dart';
 import '../../data/chat_selection.dart';
+import '../../../../core/widgets/app_network_image.dart';
 
 /// Creator profile — ports `CreatorProfileScreen` from `screens-social.jsx`.
 ///
@@ -27,7 +28,6 @@ class CreatorProfileScreen extends StatefulWidget {
 }
 
 class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
-  bool _following = false;
   bool _showMenu = false;
   String? _menuToast;
   Timer? _toastTimer;
@@ -161,20 +161,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            GestureDetector(
-                              onTap: () => setState(() => _following = !_following),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 250),
-                                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: _following ? Colors.transparent : AppColors.coral,
-                                  borderRadius: BorderRadius.circular(100),
-                                  border: _following ? Border.all(color: AppColors.coral) : null,
-                                ),
-                                child: Text(_following ? '✓ Following' : 'Follow',
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
-                              ),
-                            ),
+                            const _FollowButton(),
                             const SizedBox(width: 8),
                             GestureDetector(
                               onTap: _openMessage,
@@ -274,10 +261,9 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
-                                  Image.network(
+                                  AppNetworkImage(
                                     ImageUrls.large('5774006'),
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, _, _) => const ColoredBox(color: AppColors.bgCard),
+                                    errorBuilder: (_) => const ColoredBox(color: AppColors.bgCard),
                                   ),
                                   const DecoratedBox(
                                     decoration: BoxDecoration(
@@ -356,10 +342,9 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                                     child: Stack(
                                       fit: StackFit.expand,
                                       children: [
-                                        Image.network(
+                                        AppNetworkImage(
                                           ImageUrls.small(_recipes[i].$5),
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (_, _, _) => ColoredBox(color: _recipes[i].$4.withValues(alpha: 0.2)),
+                                          errorBuilder: (_) => ColoredBox(color: _recipes[i].$4.withValues(alpha: 0.2)),
                                         ),
                                         DecoratedBox(
                                           decoration: BoxDecoration(
@@ -599,6 +584,37 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Follow toggle kept in its own State so tapping it doesn't rebuild the whole
+/// profile screen.
+class _FollowButton extends StatefulWidget {
+  const _FollowButton();
+
+  @override
+  State<_FollowButton> createState() => _FollowButtonState();
+}
+
+class _FollowButtonState extends State<_FollowButton> {
+  bool _following = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => setState(() => _following = !_following),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
+        decoration: BoxDecoration(
+          color: _following ? Colors.transparent : AppColors.coral,
+          borderRadius: BorderRadius.circular(100),
+          border: _following ? Border.all(color: AppColors.coral) : null,
+        ),
+        child: Text(_following ? '✓ Following' : 'Follow',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
       ),
     );
   }

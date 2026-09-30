@@ -54,12 +54,16 @@ class GradientSpec {
     final rad = angleDeg * math.pi / 180;
     final dx = math.cos(rad);
     final dy = math.sin(rad);
-    final colors = overrideColors ?? [for (final s in stops) s.$1];
+    var colors = overrideColors ?? [for (final s in stops) s.$1];
+    // Gradient shaders need >= 2 colors and a stops list of equal length;
+    // a mismatch throws at paint time.
+    final useStops = colors.length == stops.length && colors.length >= 2;
+    if (colors.length == 1) colors = [colors.first, colors.first];
     return LinearGradient(
       begin: Alignment(-dx, -dy),
       end: Alignment(dx, dy),
       colors: colors,
-      stops: [for (final s in stops) s.$2 / 100],
+      stops: useStops ? [for (final s in stops) s.$2 / 100] : null,
     );
   }
 }

@@ -41,7 +41,11 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
   bool _deckLoading = true;
   Timer? _loadingTimer;
 
-  double _dragY = 0;
+  /// Drag offset lives in a notifier so finger movement only repaints the
+  /// card transform instead of rebuilding the whole screen every frame.
+  final ValueNotifier<double> _drag = ValueNotifier<double>(0);
+  double get _dragY => _drag.value;
+  set _dragY(double v) => _drag.value = v;
   bool _isDragging = false;
   String? _exitDirection; // "up" | "down"
   String? _swipeResult; // "saved" | "passed"
@@ -76,6 +80,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     _loadingTimer?.cancel();
     _flashTimer?.cancel();
     _undoTimer?.cancel();
+    _drag.dispose();
     super.dispose();
   }
 
@@ -232,11 +237,14 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
         _exitDirection = 'up';
         _likeAnim = true;
       });
-      context.read<ContentCubit>().recordSwipe(
-        itemType: 'recipe',
-        itemId: _deck[_cardIndex % _deck.length].id,
-        action: 'super_fav',
-      );
+      final deck = _deck;
+      if (deck.isNotEmpty) {
+        context.read<ContentCubit>().recordSwipe(
+          itemType: 'recipe',
+          itemId: deck[_cardIndex % deck.length].id,
+          action: 'super_fav',
+        );
+      }
       BadgeService.instance.award(const ['super_fav']);
       Timer(const Duration(milliseconds: 400), () {
         if (!mounted) return;
@@ -372,14 +380,20 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                       // not a card is already on screen.
                       if (contentLoading || _deckLoading) const _DeckSkeleton(),
                       // Deck fetch failed and left nothing to show.
-                      if (!contentLoading && !_deckLoading && card == null && content.error != null)
+                      if (!contentLoading &&
+                          !_deckLoading &&
+                          card == null &&
+                          content.error != null)
                         ErrorState(
                           message: content.error!,
                           backgroundColor: Colors.transparent,
                           onRetry: () => context.read<ContentCubit>().refetch(),
                         ),
                       // Loaded successfully but this sub-tab has nothing.
-                      if (!contentLoading && !_deckLoading && card == null && content.error == null)
+                      if (!contentLoading &&
+                          !_deckLoading &&
+                          card == null &&
+                          content.error == null)
                         EmptyState(
                           emoji: switch (state.subTab) {
                             DeckTab.drinks => '🥤',
@@ -387,7 +401,8 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                             DeckTab.food => '🍽',
                           },
                           title: 'No more to show',
-                          message: 'Check back soon for new ${state.subTab.name}.',
+                          message:
+                              'Check back soon for new ${state.subTab.name}.',
                         ),
                       // Gesture layer
                       Positioned.fill(
@@ -402,9 +417,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                           },
                           onVerticalDragUpdate: (details) {
                             if (!_isDragging) return;
-                            setState(() {
-                              _dragY -= details.delta.dy;
-                            });
+                            _dragY -= details.delta.dy;
                           },
                           onVerticalDragEnd: (_) => _onDragEnd(),
                           onTap: () {
@@ -548,28 +561,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     BiteScale scale,
     bool infoExpanded,
   ) {
-    final dragY = _dragY;
-
-    // Card physics
-    Offset transform;
-    if (_exitDirection == 'up') {
-      transform = const Offset(0, -1.1);
-    } else if (_exitDirection == 'down') {
-      transform = const Offset(0, 1.1);
-    } else {
-      transform = Offset(0, -dragY * 0.4);
-    }
-    final rotation = _exitDirection == 'down'
-        ? 6.0
-        : dragY < 0
-        ? (dragY * 0.01).clamp(-3.0, 0.0)
-        : 0.0;
     final opacity = _exitDirection != null ? 0.0 : 1.0;
-    final scaleFactor = _exitDirection == null
-        ? 1 + dragY.abs() * 0.0002
-        : _exitDirection == 'down'
-        ? 0.85
-        : 0.9;
 
     return Positioned.fill(
       child: IgnorePointer(
@@ -578,53 +570,78 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
               ? const Duration(milliseconds: 450)
               : Duration.zero,
           opacity: opacity,
-          child: Transform.translate(
-            offset: transform,
-            child: Transform.scale(
-              scale: scaleFactor,
-              child: Transform.rotate(
-                angle: rotation * 3.14159 / 180,
-                child: DeckCard(
-                  key: ValueKey('card-$_cardIndex'),
-                  card: card,
-                  subTab: state.subTab,
-                  accentColor: _accentColor,
-                  scale: scale,
-                  infoExpanded: infoExpanded,
-                  onToggleInfo: () {
-                    setState(() {
-                      _expandedByCat[state.subTab] =
-                          !(_expandedByCat[state.subTab] ?? false);
-                    });
-                  },
-                  onTap: () => _openDetail(card),
-                  onCreatorTap: () => context.read<FlowCubit>().setScreen(
-                    AppScreen.creatorProfile,
+          child: ValueListenableBuilder<double>(
+            valueListenable: _drag,
+            builder: (context, dragY, child) {
+              // Card physics
+              Offset transform;
+              if (_exitDirection == 'up') {
+                transform = const Offset(0, -1.1);
+              } else if (_exitDirection == 'down') {
+                transform = const Offset(0, 1.1);
+              } else {
+                transform = Offset(0, -dragY * 0.4);
+              }
+              final rotation = _exitDirection == 'down'
+                  ? 6.0
+                  : dragY < 0
+                  ? (dragY * 0.01).clamp(-3.0, 0.0)
+                  : 0.0;
+              final scaleFactor = _exitDirection == null
+                  ? 1 + dragY.abs() * 0.0002
+                  : _exitDirection == 'down'
+                  ? 0.85
+                  : 0.9;
+              return Transform.translate(
+                offset: transform,
+                child: Transform.scale(
+                  scale: scaleFactor,
+                  child: Transform.rotate(
+                    angle: rotation * 3.14159 / 180,
+                    child: child,
                   ),
-                  onOrderTap: () {
-                    if (card.isPlace) {
-                      ToastService.instance.show(
-                        '🛵 Opening delivery options...',
-                      );
-                    } else {
-                      setState(() => _showServicePicker = true);
-                    }
-                  },
-                  onMealTap: () => _onMealTap(card),
-                  onFavoriteTap: _onSuperFav,
-                  onCallTap: () =>
-                      ToastService.instance.show('📞 Calling restaurant...'),
-                  onDirectionsTap: () =>
-                      ToastService.instance.show('🗺 Opening directions...'),
-                  onReserveTap: () =>
-                      ToastService.instance.show('🪑 Opening reservations...'),
-                  onTagTap: (tag) =>
-                      ToastService.instance.show('🔍 Filtering by $tag'),
-                  inMealItems: state.mealItems.any(
-                    (m) => m.title == card.title,
-                  ),
-                  mealItemCount: state.mealItems.length,
                 ),
+              );
+            },
+            child: RepaintBoundary(
+              child: DeckCard(
+                key: ValueKey('card-$_cardIndex'),
+                card: card,
+                subTab: state.subTab,
+                accentColor: _accentColor,
+                scale: scale,
+                infoExpanded: infoExpanded,
+                onToggleInfo: () {
+                  setState(() {
+                    _expandedByCat[state.subTab] =
+                        !(_expandedByCat[state.subTab] ?? false);
+                  });
+                },
+                onTap: () => _openDetail(card),
+                onCreatorTap: () => context.read<FlowCubit>().setScreen(
+                  AppScreen.creatorProfile,
+                ),
+                onOrderTap: () {
+                  if (card.isPlace) {
+                    ToastService.instance.show(
+                      '🛵 Opening delivery options...',
+                    );
+                  } else {
+                    setState(() => _showServicePicker = true);
+                  }
+                },
+                onMealTap: () => _onMealTap(card),
+                onFavoriteTap: _onSuperFav,
+                onCallTap: () =>
+                    ToastService.instance.show('📞 Calling restaurant...'),
+                onDirectionsTap: () =>
+                    ToastService.instance.show('🗺 Opening directions...'),
+                onReserveTap: () =>
+                    ToastService.instance.show('🪑 Opening reservations...'),
+                onTagTap: (tag) =>
+                    ToastService.instance.show('🔍 Filtering by $tag'),
+                inMealItems: state.mealItems.any((m) => m.title == card.title),
+                mealItemCount: state.mealItems.length,
               ),
             ),
           ),
@@ -637,8 +654,15 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     final overlay = <Widget>[];
 
     // Drag indicators
-    if (_isDragging && _dragY.abs() > 20) {
-      overlay.add(_DragIndicators(dragY: _dragY));
+    if (_isDragging) {
+      overlay.add(
+        ValueListenableBuilder<double>(
+          valueListenable: _drag,
+          builder: (context, dragY, _) => dragY.abs() > 20
+              ? _DragIndicators(dragY: dragY)
+              : const SizedBox.shrink(),
+        ),
+      );
     }
 
     // Persistent swipe result
@@ -696,7 +720,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
           bottom: MediaQuery.sizeOf(context).height * 0.18,
           left: 0,
           right: 0,
-          child: _IdleNudge(),
+          child: const RepaintBoundary(child: _IdleNudge()),
         ),
       );
     }
@@ -1105,6 +1129,11 @@ class _IdleNudgeState extends State<_IdleNudge>
     duration: const Duration(seconds: 5),
   )..repeat(reverse: true);
 
+  late final Animation<double> _opacity = Tween(
+    begin: 0.0,
+    end: 0.5,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
   @override
   void dispose() {
     _controller.dispose();
@@ -1115,9 +1144,7 @@ class _IdleNudgeState extends State<_IdleNudge>
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: FadeTransition(
-        opacity: Tween(begin: 0.0, end: 0.5).animate(
-          CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-        ),
+        opacity: _opacity,
         child: Column(
           children: [
             for (var i = 0; i < 3; i++)
@@ -1338,11 +1365,13 @@ class _SkeletonCard extends StatelessWidget {
       child: Stack(
         children: [
           Positioned.fill(
-            child: Shimmer(
-              baseColor: Colors.white.withValues(alpha: 0.02),
-              highlightColor: Colors.white.withValues(alpha: 0.04),
-              duration: const Duration(milliseconds: 1500),
-              child: Container(color: Colors.white),
+            child: RepaintBoundary(
+              child: Shimmer(
+                baseColor: Colors.white.withValues(alpha: 0.02),
+                highlightColor: Colors.white.withValues(alpha: 0.04),
+                duration: const Duration(milliseconds: 1500),
+                child: Container(color: Colors.white),
+              ),
             ),
           ),
           Positioned(

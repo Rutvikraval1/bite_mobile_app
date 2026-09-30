@@ -60,10 +60,18 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 onTap: () => flow.setScreen(AppScreen.emailLogin),
               ),
             ),
-            SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(24, 120, 24, 40),
-              child: _sent ? _sentView(flow) : _formView(flow),
-            ),
+            if (_sent)
+              Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: _sentView(flow),
+                ),
+              )
+            else
+              SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 120, 24, 40),
+                child: _formView(flow),
+              ),
           ],
         ),
       ),
@@ -118,6 +126,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Widget _sentView(FlowCubit flow) {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         PopIn(child: const Text('✉️', style: TextStyle(fontSize: 56))),
         const SizedBox(height: 16),

@@ -23,6 +23,11 @@ class _PulseState extends State<Pulse> with SingleTickerProviderStateMixin {
     duration: widget.duration,
   )..repeat(reverse: true);
 
+  late final Animation<double> _scale = Tween(
+    begin: 1.0,
+    end: 1.0 + widget.amount,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
   @override
   void dispose() {
     _controller.dispose();
@@ -31,11 +36,8 @@ class _PulseState extends State<Pulse> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return ScaleTransition(
-      scale: Tween(begin: 1.0, end: 1.0 + widget.amount).animate(
-        CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-      ),
-      child: widget.child,
+    return RepaintBoundary(
+      child: ScaleTransition(scale: _scale, child: widget.child),
     );
   }
 }
@@ -62,6 +64,11 @@ class _EmojiFloatState extends State<EmojiFloat>
     duration: widget.duration,
   )..repeat(reverse: true);
 
+  late final Animation<Offset> _offset = Tween(
+    begin: Offset.zero,
+    end: const Offset(0, -6),
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+
   @override
   void dispose() {
     _controller.dispose();
@@ -70,17 +77,13 @@ class _EmojiFloatState extends State<EmojiFloat>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return Transform.translate(
-          offset: Offset(0, Tween(begin: 0.0, end: -6.0)
-              .animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut))
-              .value),
-          child: child,
-        );
-      },
-      child: widget.child,
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _offset,
+        builder: (context, child) =>
+            Transform.translate(offset: _offset.value, child: child),
+        child: widget.child,
+      ),
     );
   }
 }
@@ -118,18 +121,28 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return ShaderMask(
-      blendMode: BlendMode.srcATop,
-      shaderCallback: (bounds) {
-        return LinearGradient(
-          colors: [widget.baseColor, widget.highlightColor, widget.baseColor],
-          stops: const [0.35, 0.5, 0.65],
-          transform: _SlidingGradientTransform(
-            slidePercent: _controller.value * 2 - 1,
-          ),
-        ).createShader(bounds);
-      },
-      child: widget.child,
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) => ShaderMask(
+          blendMode: BlendMode.srcATop,
+          shaderCallback: (bounds) {
+            return LinearGradient(
+              colors: [
+                widget.baseColor,
+                widget.highlightColor,
+                widget.baseColor,
+              ],
+              stops: const [0.35, 0.5, 0.65],
+              transform: _SlidingGradientTransform(
+                slidePercent: _controller.value * 2 - 1,
+              ),
+            ).createShader(bounds);
+          },
+          child: child,
+        ),
+        child: widget.child,
+      ),
     );
   }
 }
@@ -178,31 +191,37 @@ class _BorderPulseState extends State<BorderPulse>
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: widget.borderRadius,
-            border: Border.all(
-              color: Color.lerp(
-                widget.color.withValues(alpha: 0.2),
-                widget.color.withValues(alpha: 0.55),
-                _controller.value,
-              )!,
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: widget.borderRadius,
+              border: Border.all(
+                color: Color.lerp(
+                  widget.color.withValues(alpha: 0.2),
+                  widget.color.withValues(alpha: 0.55),
+                  _controller.value,
+                )!,
+              ),
             ),
-          ),
-          child: child,
-        );
-      },
-      child: widget.child,
+            child: child,
+          );
+        },
+        child: widget.child,
+      ),
     );
   }
 }
 
 /// NotifDot — pulsing dot used on notification bells. Ports `@keyframes notifDot`.
 class NotifDot extends StatefulWidget {
-  const NotifDot({super.key, this.color = const Color(0xFFFF6B6B), this.size = 8});
+  const NotifDot({
+    super.key,
+    this.color = const Color(0xFFFF6B6B),
+    this.size = 8,
+  });
 
   final Color color;
   final double size;
@@ -211,7 +230,8 @@ class NotifDot extends StatefulWidget {
   State<NotifDot> createState() => _NotifDotState();
 }
 
-class _NotifDotState extends State<NotifDot> with SingleTickerProviderStateMixin {
+class _NotifDotState extends State<NotifDot>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
@@ -225,26 +245,28 @@ class _NotifDotState extends State<NotifDot> with SingleTickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        return Container(
-          width: widget.size,
-          height: widget.size,
-          decoration: BoxDecoration(
-            color: widget.color,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: widget.color.withValues(
-                  alpha: 0.3 + 0.6 * _controller.value,
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, _) {
+          return Container(
+            width: widget.size,
+            height: widget.size,
+            decoration: BoxDecoration(
+              color: widget.color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: widget.color.withValues(
+                    alpha: 0.3 + 0.6 * _controller.value,
+                  ),
+                  blurRadius: 2 + 6 * _controller.value,
                 ),
-                blurRadius: 2 + 6 * _controller.value,
-              ),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }

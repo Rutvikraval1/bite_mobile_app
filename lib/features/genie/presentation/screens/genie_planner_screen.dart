@@ -56,6 +56,29 @@ class _GeniePlannerScreenState extends State<GeniePlannerScreen> {
 
   Timer? _ticker;
 
+  // Timeline only depends on the (fixed) dish list and the serve time, so
+  // cache it instead of re-sorting on every build / timer tick.
+  String? _timelineServeTime;
+  List<GenieTimelineEntry> _timelineCache = const [];
+  List<GenieFlatStep> _flatStepsCache = const [];
+
+  void _ensureTimeline() {
+    if (_timelineServeTime == _serveTime) return;
+    _timelineServeTime = _serveTime;
+    _timelineCache = GeniePlannerData.buildTimeline(_dishes, _serveTime);
+    _flatStepsCache = buildFlatSteps(_timelineCache);
+  }
+
+  List<GenieTimelineEntry> get _timeline {
+    _ensureTimeline();
+    return _timelineCache;
+  }
+
+  List<GenieFlatStep> get _flatSteps {
+    _ensureTimeline();
+    return _flatStepsCache;
+  }
+
   @override
   void dispose() {
     _ticker?.cancel();
@@ -67,7 +90,7 @@ class _GeniePlannerScreenState extends State<GeniePlannerScreen> {
   void _startCooking() {
     setState(() => _started = true);
     _restartTicker();
-    final timeline = GeniePlannerData.buildTimeline(_dishes, _serveTime);
+    final timeline = _timeline;
     for (final e in timeline) {
       final done = _dishStepsDone[e.dish.id];
       if (done == null || done.length < e.dish.steps.length) {
@@ -113,8 +136,12 @@ class _GeniePlannerScreenState extends State<GeniePlannerScreen> {
   }
 
   void _tick() {
+    if (!mounted) {
+      _ticker?.cancel();
+      return;
+    }
     if (!_started || _completed) return;
-    final timeline = GeniePlannerData.buildTimeline(_dishes, _serveTime);
+    final timeline = _timeline;
     final maxTotal = GeniePlannerData.maxTotalMinutes(_dishes);
     String? headsUpMsg;
     var timerFinished = false;
@@ -202,7 +229,7 @@ class _GeniePlannerScreenState extends State<GeniePlannerScreen> {
   }
 
   void _toggleStep(GenieDish dish, int stepIndex) {
-    final timeline = GeniePlannerData.buildTimeline(_dishes, _serveTime);
+    final timeline = _timeline;
     final done = Set<int>.from(_dishStepsDone[dish.id] ?? {});
     final wasChecked = done.contains(stepIndex);
     setState(() {
@@ -361,7 +388,7 @@ class _GeniePlannerScreenState extends State<GeniePlannerScreen> {
   @override
   Widget build(BuildContext context) {
     final flow = context.read<FlowCubit>();
-    final timeline = GeniePlannerData.buildTimeline(_dishes, _serveTime);
+    final timeline = _timeline;
     final maxTotal = GeniePlannerData.maxTotalMinutes(_dishes);
     final serveMinutes = GeniePlannerData.parseTime(_serveTime);
     final startMinutes = serveMinutes - maxTotal;
@@ -372,7 +399,7 @@ class _GeniePlannerScreenState extends State<GeniePlannerScreen> {
     final allDone = timeline.every(
       (e) => _statusFor(e) == GenieDishStatus.done,
     );
-    final flatSteps = buildFlatSteps(timeline);
+    final flatSteps = _flatSteps;
 
     return Scaffold(
       backgroundColor: AppColors.bgDark,

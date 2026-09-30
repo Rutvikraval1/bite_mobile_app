@@ -20,13 +20,20 @@ class WelcomeGateScreen extends StatefulWidget {
 
 class _WelcomeGateScreenState extends State<WelcomeGateScreen> {
   bool _ready = false;
+  Timer? _readyTimer;
 
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(milliseconds: 300), () {
+    _readyTimer = Timer(const Duration(milliseconds: 300), () {
       if (mounted) setState(() => _ready = true);
     });
+  }
+
+  @override
+  void dispose() {
+    _readyTimer?.cancel();
+    super.dispose();
   }
 
   static const _items = [
@@ -57,25 +64,32 @@ class _WelcomeGateScreenState extends State<WelcomeGateScreen> {
             Positioned(
               left: _floaters[i].$1.toDouble(),
               top: _floaters[i].$2.toDouble(),
-              child: AnimatedOpacity(
-                opacity: _ready ? 0.12 : 0,
+              // Alpha is baked into the glyph color instead of an Opacity
+              // layer over an infinitely animating child.
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(end: _ready ? 0.12 : 0),
                 duration: const Duration(milliseconds: 1500),
-                child: EmojiFloat(
+                builder: (context, alpha, _) => EmojiFloat(
                   duration: Duration(seconds: 5 + (i % 3)),
                   child: Text(
                     _floaters[i].$3,
-                    style: TextStyle(fontSize: 16 + (i % 4) * 4),
+                    style: TextStyle(
+                      fontSize: 16 + (i % 4) * 4,
+                      color: Colors.white.withValues(alpha: alpha),
+                    ),
                   ),
                 ),
               ),
             ),
-          Pulse(
-            amount: 0.06,
-            duration: const Duration(seconds: 6),
-            child: const Positioned(
-              top: 100,
-              left: 0,
-              right: 0,
+          // Positioned must be the direct Stack child (it was inside Pulse,
+          // which is a ParentDataWidget misuse that throws).
+          const Positioned(
+            top: 100,
+            left: 0,
+            right: 0,
+            child: Pulse(
+              amount: 0.06,
+              duration: Duration(seconds: 6),
               child: Center(
                 child: SizedBox(
                   width: 400,

@@ -44,6 +44,8 @@ class AuthRepositoryImpl implements AuthRepository {
       return AuthResult(userId: user?.id);
     } on AuthException catch (e) {
       return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
     }
   }
 
@@ -74,6 +76,8 @@ class AuthRepositoryImpl implements AuthRepository {
       return const AuthResult(needsEmailConfirmation: true);
     } on AuthException catch (e) {
       return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
     }
   }
 
@@ -106,6 +110,8 @@ class AuthRepositoryImpl implements AuthRepository {
       return const AuthResult();
     } on AuthException catch (e) {
       return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
     }
   }
 
@@ -116,6 +122,8 @@ class AuthRepositoryImpl implements AuthRepository {
       return const AuthResult();
     } on AuthException catch (e) {
       return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
     }
   }
 
@@ -129,6 +137,8 @@ class AuthRepositoryImpl implements AuthRepository {
       return AuthResult.failure(e.message);
     } on AuthException catch (e) {
       return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
     }
   }
 
@@ -139,6 +149,8 @@ class AuthRepositoryImpl implements AuthRepository {
       return const AuthResult();
     } on AuthException catch (e) {
       return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
     }
   }
 

@@ -8,6 +8,7 @@ import '../../../../core/utils/bite_scale.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../../content/domain/entities/bite_card.dart';
+import '../../../../core/widgets/app_network_image.dart';
 
 /// Full-bleed current card — ports the current-card block from
 /// `SwipeDeckScreen` in `screens-deck.jsx`.
@@ -110,14 +111,13 @@ class _DeckCardState extends State<DeckCard> {
             ),
           ),
           // Diagonal light streak
+          // (4% opacity is baked into the gradient to avoid a per-frame
+          // offscreen Opacity layer.)
           const IgnorePointer(
-            child: Opacity(
-              opacity: 0.04,
-              child: _DiagonalStreak(),
-            ),
+            child: RepaintBoundary(child: _DiagonalStreak()),
           ),
           // Ambient edge glows
-          _EdgeGlows(color: widget.accentColor),
+          RepaintBoundary(child: _EdgeGlows(color: widget.accentColor)),
           // Emoji hero spread
           if (card.image == null || card.image!.isEmpty)
             _HeroSpread(
@@ -176,12 +176,10 @@ class _HeroPhoto extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CardHeroReveal(
-      child: Image.network(
+      child: AppNetworkImage(
         url,
-        fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
-        errorBuilder: (_, _, _) => const SizedBox.shrink(),
       ),
     );
   }
@@ -226,8 +224,8 @@ class _DiagonalStreakState extends State<_DiagonalStreak>
             gradient: LinearGradient(
               colors: [
                 Colors.transparent,
-                Color(0x66FFFFFF),
-                Color(0x33FFFFFF),
+                Color(0x04FFFFFF),
+                Color(0x02FFFFFF),
                 Colors.transparent,
               ],
               stops: [0.4, 0.45, 0.5, 0.55],
@@ -763,13 +761,12 @@ class _SwipeHints extends StatelessWidget {
           right: 0,
           child: Column(
             children: [
-              Opacity(
+              // Pulse(amount: 0) was a no-op scale running an infinite
+              // ticker; a static icon renders identically.
+              const Opacity(
                 opacity: 0.15,
-                child: Pulse(
-                  amount: 0,
-                  child: const Icon(Icons.keyboard_arrow_up_rounded,
-                      color: Colors.white, size: 16),
-                ),
+                child: Icon(Icons.keyboard_arrow_up_rounded,
+                    color: Colors.white, size: 16),
               ),
               const SizedBox(height: 2),
               const Opacity(
@@ -792,13 +789,12 @@ class _SwipeHints extends StatelessWidget {
                     color: Colors.white, size: 16),
               ),
               const SizedBox(height: 2),
-              Opacity(
+              // Pulse(amount: 0) was a no-op scale running an infinite
+              // ticker; a static icon renders identically.
+              const Opacity(
                 opacity: 0.10,
-                child: Pulse(
-                  amount: 0,
-                  child: const Icon(Icons.keyboard_arrow_down_rounded,
-                      color: Colors.white, size: 16),
-                ),
+                child: Icon(Icons.keyboard_arrow_down_rounded,
+                    color: Colors.white, size: 16),
               ),
             ],
           ),
@@ -1143,22 +1139,25 @@ class _CharWave extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final wave = math.sin(progress * math.pi);
+    // Alpha is baked into the text/shadow colors instead of wrapping every
+    // character in an Opacity (one offscreen layer per glyph per frame).
+    final alpha = (progress * 1.6).clamp(0.0, 1.0);
     return Transform.translate(
       offset: Offset(0, -wave * 6),
-      child: Opacity(
-        opacity: (progress * 1.6).clamp(0.0, 1.0),
-        child: Text(
-          char,
-          style: TextStyle(
-            fontSize: fontSize,
-            fontWeight: FontWeight.w800,
-            height: 1.15,
-            letterSpacing: -0.5,
-            color: Colors.white,
-            shadows: [
-              Shadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 6),
-            ],
-          ),
+      child: Text(
+        char,
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: FontWeight.w800,
+          height: 1.15,
+          letterSpacing: -0.5,
+          color: Colors.white.withValues(alpha: alpha),
+          shadows: [
+            Shadow(
+              color: Colors.black.withValues(alpha: 0.5 * alpha),
+              blurRadius: 6,
+            ),
+          ],
         ),
       ),
     );
@@ -1191,10 +1190,11 @@ class _MetaRow extends StatelessWidget {
     };
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      // `reverse` already right-aligns short content; a Spacer here would
+      // throw (flex child inside an unbounded horizontal scroll view).
       reverse: true,
       child: Row(
         children: [
-          const Spacer(),
           if (card.tags.isNotEmpty)
             GestureDetector(
               onTap: onToggleTags,
@@ -1345,7 +1345,7 @@ class _MetaRow extends StatelessWidget {
           if (card.heat > 0)
             Row(
               children: [
-                for (var i = 0; i < card.heat; i++)
+                for (var i = 0; i < card.heat.clamp(0, 5); i++)
                   Text(
                     '🌶',
                     style: TextStyle(

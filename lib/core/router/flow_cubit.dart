@@ -101,21 +101,21 @@ class FlowCubit extends Cubit<FlowState> {
     emit(state.copyWith(transitionVisible: true));
 
     Future<void>.delayed(fadeIn, () {
-      if (gen != _generation) return;
+      if (isClosed || gen != _generation) return;
       emit(FlowState(
         screen: next,
         previous: prev,
         transitionVisible: false,
       ));
       Future<void>.delayed(fadeOut, () {
-        if (gen != _generation) return;
+        if (isClosed || gen != _generation) return;
         emit(state.copyWith(transitionVisible: false));
       });
     });
 
     // Safety: force the overlay off no matter what.
     Future<void>.delayed(safetyTimeout, () {
-      if (gen != _generation) return;
+      if (isClosed || gen != _generation) return;
       emit(state.copyWith(transitionVisible: false));
     });
   }

@@ -29,9 +29,12 @@ class ContentRepositoryImpl implements ContentRepository {
       places: SeedData.places,
     );
     try {
-      final rRes = await _client.from(TableNames.recipes).select().order('id');
-      final dRes = await _client.from(TableNames.drinks).select().order('id');
-      final pRes = await _client.from(TableNames.places).select().order('id');
+      // Fetch the three tables in parallel rather than one after another.
+      final (rRes, dRes, pRes) = await (
+        _client.from(TableNames.recipes).select().order('id'),
+        _client.from(TableNames.drinks).select().order('id'),
+        _client.from(TableNames.places).select().order('id'),
+      ).wait;
 
       final recipes = _rows(rRes);
       final drinks = _rows(dRes);

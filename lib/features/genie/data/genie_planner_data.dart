@@ -227,8 +227,8 @@ abstract final class GeniePlannerData {
   static int parseTime(String t) {
     final parts = t.split(' ');
     final hm = parts[0].split(':');
-    var h = int.parse(hm[0]);
-    final m = int.parse(hm[1]);
+    var h = int.tryParse(hm[0]) ?? 0;
+    final m = hm.length > 1 ? (int.tryParse(hm[1]) ?? 0) : 0;
     final ampm = parts.length > 1 ? parts[1] : 'PM';
     if (ampm == 'PM' && h != 12) h += 12;
     if (ampm == 'AM' && h == 12) h = 0;
@@ -251,9 +251,7 @@ abstract final class GeniePlannerData {
     List<GenieDish> dishes,
     String serveTime,
   ) {
-    final maxTotal = dishes
-        .map((d) => d.totalMin)
-        .reduce((a, b) => a > b ? a : b);
+    final maxTotal = maxTotalMinutes(dishes);
     final serveMinutes = parseTime(serveTime);
     final startMinutes = serveMinutes - maxTotal;
     final entries =
@@ -270,6 +268,7 @@ abstract final class GeniePlannerData {
     return entries;
   }
 
+  /// Longest dish duration; 0 for an empty list (`reduce` would throw).
   static int maxTotalMinutes(List<GenieDish> dishes) =>
-      dishes.map((d) => d.totalMin).reduce((a, b) => a > b ? a : b);
+      dishes.fold(0, (a, d) => a > d.totalMin ? a : d.totalMin);
 }

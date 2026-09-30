@@ -6,6 +6,7 @@ import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/legal_links.dart';
 import '../../../../core/widgets/glass.dart';
 import '../../../auth/domain/entities/auth_state.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
@@ -188,7 +189,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _sectionLabel('PRIVACY'),
                       for (final item in const ['🔒 Privacy Settings', '📊 Data & Storage', '🛡 Blocked Users']) _menuRow(item, () => context.showToast('Coming soon')),
                       _sectionLabel('ABOUT'),
-                      for (final item in const ['📋 Terms of Service', '🔐 Privacy Policy', 'ℹ️ About b🌶te', '💬 Send Feedback']) _menuRow(item, () => context.showToast('Coming soon')),
+                      _menuRow('📋 Terms of Service', LegalLinks.openTerms),
+                      _menuRow('🔐 Privacy Policy', LegalLinks.openPrivacyPolicy),
+                      for (final item in const ['ℹ️ About b🌶te', '💬 Send Feedback']) _menuRow(item, () => context.showToast('Coming soon')),
                       Padding(
                         padding: const EdgeInsets.only(top: 12),
                         child: Container(

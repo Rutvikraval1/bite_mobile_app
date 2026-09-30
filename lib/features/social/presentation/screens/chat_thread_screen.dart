@@ -58,7 +58,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
+      if (!mounted || !_scroll.hasClients) return;
       _scroll.animateTo(
         _scroll.position.maxScrollExtent,
         duration: const Duration(milliseconds: 250),
@@ -84,6 +84,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     });
     _replyTimer = Timer(const Duration(milliseconds: 2500), () {
       if (!mounted) return;
+      if (mockThreadReplies.isEmpty) {
+        setState(() => _isTyping = false);
+        return;
+      }
       final reply = mockThreadReplies[_sent.length % mockThreadReplies.length];
       setState(() {
         _isTyping = false;
@@ -143,7 +147,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     children: [
                       for (final r in mockThreadQuickReplies)
                         GestureDetector(
-                          onTap: () => setState(() => _input.text = r),
+                          onTap: () => _input.text = r,
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
@@ -174,7 +178,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                           alignment: Alignment.centerLeft,
                           child: TextField(
                             controller: _input,
-                            onChanged: (_) => setState(() {}),
                             onSubmitted: _send,
                             style: const TextStyle(color: Colors.white, fontSize: 14),
                             decoration: InputDecoration(
@@ -187,17 +190,25 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                         ),
                       ),
                       const SizedBox(width: 10),
-                      GestureDetector(
-                        onTap: _input.text.trim().isNotEmpty ? () => _send() : null,
-                        child: Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _input.text.trim().isNotEmpty ? AppColors.coral : Colors.white.withValues(alpha: 0.08),
-                          ),
-                          child: const Icon(Icons.send_rounded, size: 18, color: Colors.white),
-                        ),
+                      // Only the send button depends on the typed text — listen
+                      // to the controller here instead of setState per keystroke.
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _input,
+                        builder: (context, value, _) {
+                          final hasText = value.text.trim().isNotEmpty;
+                          return GestureDetector(
+                            onTap: hasText ? () => _send() : null,
+                            child: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: hasText ? AppColors.coral : Colors.white.withValues(alpha: 0.08),
+                              ),
+                              child: const Icon(Icons.send_rounded, size: 18, color: Colors.white),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),

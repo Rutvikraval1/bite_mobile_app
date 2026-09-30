@@ -32,7 +32,10 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
   bool _showLeaderboard = false;
   String? _slideOut;
 
-  List<List<EloEntry>> get _matchups {
+  // Built once instead of on every build/vote.
+  late final List<List<EloEntry>> _matchups = _buildMatchups();
+
+  List<List<EloEntry>> _buildMatchups() {
     final entries = EloVotingData.entries;
     final pairs = <List<EloEntry>>[];
     for (var i = 0; i + 1 < entries.length; i += 2) {
@@ -48,6 +51,7 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
       return;
     }
     final matchups = _matchups;
+    if (matchups.isEmpty) return;
     final pair = matchups[_matchIndex % matchups.length];
     final left = pair[0];
     final right = pair[1];
@@ -86,6 +90,7 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
   @override
   Widget build(BuildContext context) {
     final matchups = _matchups;
+    if (matchups.isEmpty) return const Scaffold(backgroundColor: AppColors.bgDark);
     final pair = matchups[_matchIndex % matchups.length];
 
     return Scaffold(

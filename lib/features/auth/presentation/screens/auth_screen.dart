@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -7,9 +8,11 @@ import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/legal_links.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../../../core/widgets/glass.dart';
+import '../../../../core/widgets/linked_text.dart';
 import '../widgets/auth_widgets.dart';
 
 /// Auth landing — rotating taglines + trending dish + sign-up buttons.
@@ -159,12 +162,16 @@ class _AuthScreenState extends State<AuthScreen> {
                       StaggerReveal(
                         stagger: const Duration(milliseconds: 120),
                         children: [
-                          _OAuthButton(
-                            label: 'Continue with Google',
-                            emoji: 'G',
-                            onTap: () => _oauth('Google'),
-                          ),
-                          const SizedBox(height: 12),
+                          // Android: Google + Apple. iOS: Apple only.
+                          if (defaultTargetPlatform !=
+                              TargetPlatform.iOS) ...[
+                            _OAuthButton(
+                              label: 'Continue with Google',
+                              emoji: 'G',
+                              onTap: () => _oauth('Google'),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                           _OAuthButton(
                             label: 'Continue with Apple',
                             emoji: '',
@@ -200,14 +207,32 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      const Text(
-                        "By continuing, you agree to b🌶te's Terms of Service\nand Privacy Policy.",
+                      const LinkedText(
+                        segments: [
+                          LinkedTextSegment(
+                            "By continuing, you agree to b🌶te's ",
+                          ),
+                          LinkedTextSegment(
+                            'Terms of Service',
+                            onTap: LegalLinks.openTerms,
+                          ),
+                          LinkedTextSegment('\nand '),
+                          LinkedTextSegment(
+                            'Privacy Policy',
+                            onTap: LegalLinks.openPrivacyPolicy,
+                          ),
+                          LinkedTextSegment('.'),
+                        ],
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Color(0x1FFFFFFF),
                           fontSize: 10,
                           height: 1.5,
                           fontFamily: 'Inter',
+                        ),
+                        linkStyle: TextStyle(
+                          color: AppColors.muted,
+                          decoration: TextDecoration.underline,
                         ),
                       ),
                     ],

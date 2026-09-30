@@ -69,11 +69,14 @@ class MealReminderScreen extends StatelessWidget {
       color: Colors.transparent,
       child: Stack(
       children: [
-        BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-          child: const ModalBarrier(
-            color: Color(0xB3000000),
-            dismissible: false,
+        // ClipRect bounds the blur to this layer's own rect.
+        ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: const ModalBarrier(
+              color: Color(0xB3000000),
+              dismissible: false,
+            ),
           ),
         ),
         Align(

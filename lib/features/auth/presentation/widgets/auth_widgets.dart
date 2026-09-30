@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -6,7 +7,7 @@ import '../../../../core/widgets/app_safe_area.dart';
 import '../../../../core/widgets/glass.dart';
 
 /// Shared labeled input used across auth screens.
-class AuthField extends StatelessWidget {
+class AuthField extends StatefulWidget {
   const AuthField({
     super.key,
     required this.controller,
@@ -22,6 +23,7 @@ class AuthField extends StatelessWidget {
     this.valid = false,
     this.maxLength,
     this.filled,
+    this.showObscureToggle = false,
   });
 
   final TextEditingController controller;
@@ -38,46 +40,80 @@ class AuthField extends StatelessWidget {
   final int? maxLength;
   final bool? filled;
 
+  /// Shows an eye icon that reveals/hides the text when [obscure] is true.
+  final bool showObscureToggle;
+
+  @override
+  State<AuthField> createState() => _AuthFieldState();
+}
+
+class _AuthFieldState extends State<AuthField> {
+  late bool _obscured = widget.obscure;
+
+  @override
+  void didUpdateWidget(AuthField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.obscure != widget.obscure) _obscured = widget.obscure;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final showToggle = widget.obscure && widget.showObscureToggle;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
             Text(
-              label,
+              widget.label,
               style: const TextStyle(
                 color: AppColors.muted,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            if (suffix != null) ...[const SizedBox(width: 6), suffix!],
+            if (widget.suffix != null) ...[
+              const SizedBox(width: 6),
+              widget.suffix!,
+            ],
           ],
         ),
         const SizedBox(height: 6),
         GestureDetector(
-          onTap: onTap,
+          onTap: widget.onTap,
           child: AbsorbPointer(
-            absorbing: onTap != null,
+            absorbing: widget.onTap != null,
             child: TextField(
-              controller: controller,
-              onChanged: onChanged,
-              obscureText: obscure,
-              keyboardType: keyboardType,
-              maxLength: maxLength,
+              controller: widget.controller,
+              onChanged: widget.onChanged,
+              obscureText: _obscured,
+              keyboardType: widget.keyboardType,
+              maxLength: widget.maxLength,
               style: const TextStyle(fontSize: 15),
               decoration: InputDecoration(
-                hintText: hint,
+                hintText: widget.hint,
                 counterText: '',
-                prefixText: prefix,
-                errorText: errorText,
-                fillColor: filled ?? false ? AppColors.glass : AppColors.glass,
+                prefixText: widget.prefix,
+                errorText: widget.errorText,
+                suffixIcon: showToggle
+                    ? IconButton(
+                        onPressed: () => setState(() => _obscured = !_obscured),
+                        icon: Icon(
+                          _obscured
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
+                          color: AppColors.muted,
+                          size: 20,
+                        ),
+                      )
+                    : null,
+                fillColor: widget.filled ?? false
+                    ? AppColors.glass
+                    : AppColors.glass,
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(
-                    color: valid
+                    color: widget.valid
                         ? AppColors.coral.withValues(alpha: 0.25)
                         : AppColors.glassBorder,
                   ),
@@ -276,10 +312,13 @@ class OAuthRow extends StatelessWidget {
       );
     }
 
+    // Android: Google + Apple. iOS: Apple only.
     return Row(
       children: [
-        button('Google', 'G', onGoogle),
-        const SizedBox(width: 12),
+        if (defaultTargetPlatform != TargetPlatform.iOS) ...[
+          button('Google', 'G', onGoogle),
+          const SizedBox(width: 12),
+        ],
         button('Apple', '', onApple),
       ],
     );

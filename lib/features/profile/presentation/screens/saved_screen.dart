@@ -18,6 +18,7 @@ import '../../../../core/widgets/glass.dart';
 import '../../../content/domain/entities/saved_item.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
 import '../../data/mock_profile_data.dart';
+import '../../../../core/widgets/app_network_image.dart';
 
 /// The "Saved" tab — favorites, liked items, personal cookbook, collections,
 /// recently-passed recall and the Family Kitchen Requests teaser.
@@ -57,8 +58,13 @@ class _SavedScreenState extends State<SavedScreen> {
       body: Stack(
         children: [
           BlocBuilder<AppStateCubit, AppState>(
+            buildWhen: (p, c) => p.isPremium != c.isPremium,
             builder: (context, appState) {
               return BlocBuilder<ContentCubit, ContentState>(
+                buildWhen: (p, c) =>
+                    p.savedItems != c.savedItems ||
+                    p.savedLoading != c.savedLoading ||
+                    p.error != c.error,
                 builder: (context, content) {
                   return _buildBody(
                     context,
@@ -92,12 +98,13 @@ class _SavedScreenState extends State<SavedScreen> {
       'liked' => savedItems.where((i) => i.liked && !i.favorited).toList(),
       _ => savedItems,
     };
-    final filteredItems = _searchQuery.isEmpty
+    final query = _searchQuery.toLowerCase();
+    final filteredItems = query.isEmpty
         ? baseFiltered
         : baseFiltered
             .where((i) =>
-                i.title.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-                i.creator.toLowerCase().contains(_searchQuery.toLowerCase()))
+                i.title.toLowerCase().contains(query) ||
+                i.creator.toLowerCase().contains(query))
             .toList();
 
     final favCount = savedItems.where((i) => i.favorited).length;
@@ -112,153 +119,161 @@ class _SavedScreenState extends State<SavedScreen> {
 
     final showGrid = _activeFilter == 'all' || _activeFilter == 'favorites' || _activeFilter == 'liked';
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 110),
-      children: [
-        SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Saved',
-                  style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
-                ),
-                Row(
-                  children: [
-                    if (isPremium)
-                      GestureDetector(
-                        onTap: () {
-                          setState(() => _activeFilter = 'collections');
-                          context.showToast('📝 Name your new list!');
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: AppColors.coral.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(100),
-                            border: Border.all(color: AppColors.coral.withValues(alpha: 0.25)),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.add, size: 14, color: AppColors.coral),
-                              SizedBox(width: 4),
-                              Text('New List', style: TextStyle(color: AppColors.coral, fontSize: 11, fontWeight: FontWeight.w700)),
-                            ],
-                          ),
-                        ),
+    // Slivers so a large saved-items grid is built lazily rather than as a
+    // shrink-wrapped GridView inside a ListView.
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Saved',
+                        style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
                       ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => setState(() => _showSearch = !_showSearch),
-                      child: Icon(Icons.search, size: 20, color: _showSearch ? AppColors.coral : AppColors.muted),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (_showSearch)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: TextField(
-              controller: _searchController,
-              autofocus: true,
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              decoration: InputDecoration(
-                hintText: 'Search saved recipes, drinks, places...',
-                hintStyle: TextStyle(color: AppColors.muted, fontSize: 13),
-                filled: true,
-                fillColor: AppColors.glass,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(
-                    color: _searchQuery.isNotEmpty ? AppColors.coral.withValues(alpha: 0.27) : AppColors.glassBorder,
-                  ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(
-                    color: _searchQuery.isNotEmpty ? AppColors.coral.withValues(alpha: 0.27) : AppColors.glassBorder,
+                      Row(
+                        children: [
+                          if (isPremium)
+                            GestureDetector(
+                              onTap: () {
+                                setState(() => _activeFilter = 'collections');
+                                context.showToast('📝 Name your new list!');
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.coral.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(100),
+                                  border: Border.all(color: AppColors.coral.withValues(alpha: 0.25)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.add, size: 14, color: AppColors.coral),
+                                    SizedBox(width: 4),
+                                    Text('New List', style: TextStyle(color: AppColors.coral, fontSize: 11, fontWeight: FontWeight.w700)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: () => setState(() => _showSearch = !_showSearch),
+                            child: Icon(Icons.search, size: 20, color: _showSearch ? AppColors.coral : AppColors.muted),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ),
-          ),
-        SizedBox(
-          height: 48,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            children: [
-              for (var i = 0; i < filters.length; i++)
+              if (_showSearch)
                 Padding(
-                  padding: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: TextField(
+                    controller: _searchController,
+                    autofocus: true,
+                    onChanged: (v) => setState(() => _searchQuery = v),
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Search saved recipes, drinks, places...',
+                      hintStyle: TextStyle(color: AppColors.muted, fontSize: 13),
+                      filled: true,
+                      fillColor: AppColors.glass,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                          color: _searchQuery.isNotEmpty ? AppColors.coral.withValues(alpha: 0.27) : AppColors.glassBorder,
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                          color: _searchQuery.isNotEmpty ? AppColors.coral.withValues(alpha: 0.27) : AppColors.glassBorder,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              SizedBox(
+                height: 48,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  children: [
+                    for (var i = 0; i < filters.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ZoomIn(
+                          duration: Duration(milliseconds: 260 + i * 30),
+                          child: _FilterPill(
+                            label: filters[i].$2,
+                            active: _activeFilter == filters[i].$1,
+                            onTap: () => setState(() => _activeFilter = filters[i].$1),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (!isPremium && showGrid)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                   child: ZoomIn(
-                    duration: Duration(milliseconds: 260 + i * 30),
-                    child: _FilterPill(
-                      label: filters[i].$2,
-                      active: _activeFilter == filters[i].$1,
-                      onTap: () => setState(() => _activeFilter = filters[i].$1),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppColors.amber.withValues(alpha: 0.03),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.amber.withValues(alpha: 0.09)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Text('⏳', style: TextStyle(fontSize: 14)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: RichText(
+                              text: TextSpan(
+                                children: [
+                                  const TextSpan(
+                                    text: 'Free tier: ',
+                                    style: TextStyle(color: AppColors.amber, fontSize: 11, fontWeight: FontWeight.w600),
+                                  ),
+                                  TextSpan(
+                                    text: '$maxFavs favorites · Liked expire in ${expireDays}d',
+                                    style: TextStyle(color: AppColors.muted, fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => context.read<FlowCubit>().setScreen(AppScreen.premium),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppColors.coral.withValues(alpha: 0.13),
+                                borderRadius: BorderRadius.circular(100),
+                              ),
+                              child: const Text('Upgrade', style: TextStyle(color: AppColors.coral, fontSize: 10, fontWeight: FontWeight.w700)),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
             ],
           ),
         ),
-        if (!isPremium && showGrid)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-            child: ZoomIn(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: AppColors.amber.withValues(alpha: 0.03),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.amber.withValues(alpha: 0.09)),
-                ),
-                child: Row(
-                  children: [
-                    const Text('⏳', style: TextStyle(fontSize: 14)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: RichText(
-                        text: TextSpan(
-                          children: [
-                            const TextSpan(
-                              text: 'Free tier: ',
-                              style: TextStyle(color: AppColors.amber, fontSize: 11, fontWeight: FontWeight.w600),
-                            ),
-                            TextSpan(
-                              text: '$maxFavs favorites · Liked expire in ${expireDays}d',
-                              style: TextStyle(color: AppColors.muted, fontSize: 11),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () => context.read<FlowCubit>().setScreen(AppScreen.premium),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppColors.coral.withValues(alpha: 0.13),
-                          borderRadius: BorderRadius.circular(100),
-                        ),
-                        child: const Text('Upgrade', style: TextStyle(color: AppColors.coral, fontSize: 10, fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
         if (showGrid)
           ..._buildGridSection(
             context,
@@ -271,10 +286,18 @@ class _SavedScreenState extends State<SavedScreen> {
             savedLoading: savedLoading,
             error: error,
           ),
-        if (_activeFilter == 'myrecipes') _buildMyRecipes(context),
-        if (_activeFilter == 'collections') _buildCollections(context, isPremium),
-        _buildRecentlyPassed(context, isPremium),
-        _buildKitchenRequests(context),
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_activeFilter == 'myrecipes') _buildMyRecipes(context),
+              if (_activeFilter == 'collections') _buildCollections(context, isPremium),
+              _buildRecentlyPassed(context, isPremium),
+              _buildKitchenRequests(context),
+            ],
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 110)),
       ],
     );
   }
@@ -301,86 +324,95 @@ class _SavedScreenState extends State<SavedScreen> {
     final stillLoading = savedLoading && savedItems.isEmpty;
     final hasError = error != null && savedItems.isEmpty;
 
+    // Returns slivers.
     return [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-        child: Text(subtitle, style: TextStyle(color: AppColors.muted, fontSize: 12)),
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+          child: Text(subtitle, style: TextStyle(color: AppColors.muted, fontSize: 12)),
+        ),
       ),
       if (stillLoading)
-        const LoadingState(label: 'Loading your saved items…', height: 240)
+        const SliverToBoxAdapter(child: LoadingState(label: 'Loading your saved items…', height: 240))
       else if (hasError)
-        ErrorState(
-          message: error,
-          onRetry: () => context.read<ContentCubit>().reloadSaved(),
+        SliverToBoxAdapter(
+          child: ErrorState(
+            message: error,
+            onRetry: () => context.read<ContentCubit>().reloadSaved(),
+          ),
         )
       else if (filteredItems.isEmpty)
-        EmptyState(
-          emoji: '🍽',
-          title: 'Nothing here yet',
-          message: _activeFilter == 'favorites'
-              ? 'Swipe up on a recipe, then tap ⭐ to favorite it'
-              : _activeFilter == 'liked'
-                  ? 'Swipe up on recipes you love to save them here'
-                  : 'Start swiping to build your collection!',
-          action: GestureDetector(
-            onTap: () => context.read<FlowCubit>().setScreen(AppScreen.swipeDeck),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-              decoration: BoxDecoration(color: AppColors.coral, borderRadius: BorderRadius.circular(100)),
-              child: const Text('Start Swiping 🌶', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+        SliverToBoxAdapter(
+          child: EmptyState(
+            emoji: '🍽',
+            title: 'Nothing here yet',
+            message: _activeFilter == 'favorites'
+                ? 'Swipe up on a recipe, then tap ⭐ to favorite it'
+                : _activeFilter == 'liked'
+                    ? 'Swipe up on recipes you love to save them here'
+                    : 'Start swiping to build your collection!',
+            action: GestureDetector(
+              onTap: () => context.read<FlowCubit>().setScreen(AppScreen.swipeDeck),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                decoration: BoxDecoration(color: AppColors.coral, borderRadius: BorderRadius.circular(100)),
+                child: const Text('Start Swiping 🌶', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+              ),
             ),
           ),
         )
       else
-        Padding(
+        SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: _SavedItemGrid(items: filteredItems),
+          sliver: _SavedItemGrid(items: filteredItems),
         ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
-        child: Glass(
-          borderRadius: 14,
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Icon(isPremium ? Icons.lock_open_rounded : Icons.lock_rounded, size: 18, color: isPremium ? AppColors.cyan : AppColors.muted),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Undo Passed Recipes', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                    Text(
-                      isPremium ? 'Tap any passed card to bring it back' : 'Bring back cards you swiped away',
-                      style: TextStyle(color: AppColors.muted, fontSize: 11),
-                    ),
-                  ],
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
+          child: Glass(
+            borderRadius: 14,
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Icon(isPremium ? Icons.lock_open_rounded : Icons.lock_rounded, size: 18, color: isPremium ? AppColors.cyan : AppColors.muted),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Undo Passed Recipes', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                      Text(
+                        isPremium ? 'Tap any passed card to bring it back' : 'Bring back cards you swiped away',
+                        style: TextStyle(color: AppColors.muted, fontSize: 11),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              if (isPremium)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: AppColors.cyan.withValues(alpha: 0.09),
-                    borderRadius: BorderRadius.circular(100),
-                    border: Border.all(color: AppColors.cyan.withValues(alpha: 0.2)),
-                  ),
-                  child: const Text('Unlocked ✓', style: TextStyle(color: AppColors.cyan, fontSize: 11, fontWeight: FontWeight.w600)),
-                )
-              else
-                GestureDetector(
-                  onTap: () => PremiumGateService.instance.show(
-                    'Undo Passed Recipes',
-                    'premium',
-                    'Accidentally swiped past a recipe? Premium lets you undo and bring back any card you passed.',
-                  ),
-                  child: Container(
+                if (isPremium)
+                  Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                    decoration: BoxDecoration(color: AppColors.coral, borderRadius: BorderRadius.circular(100)),
-                    child: const Text('Upgrade', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                    decoration: BoxDecoration(
+                      color: AppColors.cyan.withValues(alpha: 0.09),
+                      borderRadius: BorderRadius.circular(100),
+                      border: Border.all(color: AppColors.cyan.withValues(alpha: 0.2)),
+                    ),
+                    child: const Text('Unlocked ✓', style: TextStyle(color: AppColors.cyan, fontSize: 11, fontWeight: FontWeight.w600)),
+                  )
+                else
+                  GestureDetector(
+                    onTap: () => PremiumGateService.instance.show(
+                      'Undo Passed Recipes',
+                      'premium',
+                      'Accidentally swiped past a recipe? Premium lets you undo and bring back any card you passed.',
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(color: AppColors.coral, borderRadius: BorderRadius.circular(100)),
+                      child: const Text('Upgrade', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -834,19 +866,20 @@ class _SavedItemGrid extends StatelessWidget {
         _ => '🍽',
       };
 
+  /// Returns a sliver so grid cards are built lazily as they scroll in.
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
+    return SliverMainAxisGroup(
+      slivers: [
         if (items.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _SavedCard(item: items[0], color: _typeColor(items[0]), height: 160, titleSize: 16, emojiSize: 40, typeEmoji: _typeEmoji(items[0].itemType)),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _SavedCard(item: items[0], color: _typeColor(items[0]), height: 160, titleSize: 16, emojiSize: 40, typeEmoji: _typeEmoji(items[0].itemType)),
+            ),
           ),
         if (items.length > 1)
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
+          SliverGrid.builder(
             itemCount: items.length - 1,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
@@ -909,7 +942,7 @@ class _SavedCard extends StatelessWidget {
           children: [
             if (item.imageUrl != null)
               Positioned.fill(
-                child: Image.network(item.imageUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => const SizedBox.shrink()),
+                child: AppNetworkImage(item.imageUrl!),
               ),
             if (item.imageUrl != null)
               const Positioned.fill(

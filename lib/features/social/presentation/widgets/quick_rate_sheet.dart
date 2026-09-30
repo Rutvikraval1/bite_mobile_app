@@ -48,11 +48,13 @@ class _QuickRateSheetState extends State<QuickRateSheet> {
   final TextEditingController _comment = TextEditingController();
   bool _photo = false;
   bool _shared = false;
+  Timer? _shareTimer;
 
   int get _earnedPts => (_rating != null ? 5 : 0) + (_comment.text.isNotEmpty ? 3 : 0) + (_photo ? 5 : 0);
 
   @override
   void dispose() {
+    _shareTimer?.cancel();
     _comment.dispose();
     super.dispose();
   }
@@ -61,7 +63,9 @@ class _QuickRateSheetState extends State<QuickRateSheet> {
     final rating = _rating;
     if (rating == null) return;
     setState(() => _shared = true);
-    Timer(const Duration(milliseconds: 1200), () {
+    _shareTimer?.cancel();
+    _shareTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted) return;
       widget.onShared(QuickRateResult(rating: rating, comment: _comment.text, photo: _photo));
     });
   }

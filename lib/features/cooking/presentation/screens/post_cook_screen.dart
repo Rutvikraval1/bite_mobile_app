@@ -31,6 +31,9 @@ class _PostCookScreenState extends State<PostCookScreen> {
   bool _photoUploaded = false;
   final TextEditingController _commentController = TextEditingController();
   bool _showAchievement = false;
+  bool _hadReview = false;
+  Timer? _achievementShowTimer;
+  Timer? _achievementHideTimer;
   late String _finishedOnTime;
 
   static const Map<int, int> _tipPoints = {3: 30, 5: 50, 10: 100};
@@ -47,16 +50,18 @@ class _PostCookScreenState extends State<PostCookScreen> {
     }
     context.read<AppStateCubit>().addXp(25);
 
-    Timer(const Duration(milliseconds: 1200), () {
+    _achievementShowTimer = Timer(const Duration(milliseconds: 1200), () {
       if (mounted) setState(() => _showAchievement = true);
     });
-    Timer(const Duration(milliseconds: 4500), () {
+    _achievementHideTimer = Timer(const Duration(milliseconds: 4500), () {
       if (mounted) setState(() => _showAchievement = false);
     });
   }
 
   @override
   void dispose() {
+    _achievementShowTimer?.cancel();
+    _achievementHideTimer?.cancel();
     _commentController.dispose();
     super.dispose();
   }
@@ -377,14 +382,26 @@ class _PostCookScreenState extends State<PostCookScreen> {
                   isDense: true,
                   counterText: '',
                 ),
-                onChanged: (_) => setState(() {}),
+                // Only the progress checklist depends on the text, and only
+                // on whether it's empty — skip full-screen rebuilds on every
+                // keystroke otherwise.
+                onChanged: (text) {
+                  final hasReview = text.trim().isNotEmpty;
+                  if (hasReview != _hadReview) {
+                    setState(() => _hadReview = hasReview);
+                  }
+                },
               ),
             ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text('Visible on the Social feed', style: TextStyle(color: AppColors.muted, fontSize: 11)),
-                Text('${_commentController.text.length}/150', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _commentController,
+                  builder: (context, value, _) =>
+                      Text('${value.text.length}/150', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                ),
               ],
             ),
           ],

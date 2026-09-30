@@ -31,16 +31,16 @@ class _SplashScreenState extends State<SplashScreen> {
     super.initState();
     _t1 = Timer(
       const Duration(milliseconds: 400),
-      () => setState(() => _phase = 1),
+      () => mounted ? setState(() => _phase = 1) : null,
     );
     _t2 = Timer(
       const Duration(milliseconds: 1000),
-      () => setState(() => _phase = 2),
+      () => mounted ? setState(() => _phase = 2) : null,
     );
     if (!widget.hold) {
       _t3 = Timer(
         const Duration(milliseconds: 2400),
-        () => setState(() => _phase = 3),
+        () => mounted ? setState(() => _phase = 3) : null,
       );
       _t4 = Timer(const Duration(milliseconds: 3000), () {
         if (mounted) context.read<FlowCubit>().setScreen(AppScreen.auth);

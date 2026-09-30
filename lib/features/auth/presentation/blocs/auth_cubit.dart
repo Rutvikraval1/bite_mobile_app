@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/services/premium_gate_service.dart';
@@ -10,7 +11,11 @@ import '../../domain/repositories/auth_repository.dart';
 /// Manages the auth session and profile. Ports `useAuth` + `AuthProvider`.
 class AuthCubit extends Cubit<AuthState> {
   AuthCubit(this._repository) : super(const AuthState()) {
-    _authSub = _repository.streamAuthUser().listen(_onUserChanged);
+    _authSub = _repository.streamAuthUser().listen(
+      _onUserChanged,
+      // Token-refresh/network errors on the auth stream must not go uncaught.
+      onError: (Object e) => debugPrint('[bite] auth stream error: $e'),
+    );
     _bootstrap();
   }
 
@@ -18,7 +23,13 @@ class AuthCubit extends Cubit<AuthState> {
   StreamSubscription<AuthUser?>? _authSub;
 
   Future<void> _bootstrap() async {
-    final user = await _repository.getCurrentUser();
+    AuthUser? user;
+    try {
+      user = await _repository.getCurrentUser();
+    } catch (e) {
+      debugPrint('[bite] getCurrentUser failed: $e');
+    }
+    if (isClosed) return;
     if (user == null) {
       emit(const AuthState(user: null, loading: false));
       return;
@@ -27,6 +38,7 @@ class AuthCubit extends Cubit<AuthState> {
   }
 
   Future<void> _onUserChanged(AuthUser? user) async {
+    if (isClosed) return;
     if (user == null) {
       emit(const AuthState(user: null, loading: false));
       return;
@@ -35,13 +47,16 @@ class AuthCubit extends Cubit<AuthState> {
   }
 
   Future<void> _loadProfile(AuthUser user) async {
+    if (isClosed) return;
     emit(AuthState(user: user, loading: true));
     var result = await _repository.fetchProfile(user.id);
-    if (result.hasError) {
+    if (result.hasError && !isClosed) {
       // Trigger race — create a minimal row then refetch.
       await _repository.createProfile(user.id);
       result = await _repository.fetchProfile(user.id);
     }
+    // Bail if closed or a newer auth event (sign-out / other user) landed.
+    if (isClosed || state.user?.id != user.id) return;
     final profile = result.profile;
     if (profile != null) {
       PremiumGateService.instance
@@ -94,13 +109,13 @@ class AuthCubit extends Cubit<AuthState> {
     final result = await _repository.updateProfile(userId, updates);
     if (result.isSuccess) {
       final fresh = await _repository.fetchProfile(userId);
-      if (!fresh.hasError) {
+      if (!fresh.hasError && !isClosed && state.user?.id == userId) {
         emit(state.copyWith(profile: fresh.profile));
       }
     }
     return result.isSuccess
         ? const AuthResult()
-        : AuthResult.failure(result.error!);
+        : AuthResult.failure(result.error ?? 'Could not update profile');
   }
 
   /// Local-only profile refresh used after XP/reward flows update a table.
@@ -108,7 +123,7 @@ class AuthCubit extends Cubit<AuthState> {
     final userId = state.user?.id;
     if (userId == null) return;
     final result = await _repository.fetchProfile(userId);
-    if (!result.hasError) {
+    if (!result.hasError && !isClosed && state.user?.id == userId) {
       emit(state.copyWith(profile: result.profile));
     }
   }

@@ -71,22 +71,22 @@ class _GamificationTutorialScreenState
   void initState() {
     super.initState();
     _scrollController.addListener(() {
-      if (_scrollController.offset > 0 && !_hasScrolled) {
+      if (mounted && _scrollController.offset > 0 && !_hasScrolled) {
         setState(() => _hasScrolled = true);
       }
     });
     _timers = [
       Timer(
         const Duration(milliseconds: 200),
-        () => setState(() => _visible = 1),
+        () => mounted ? setState(() => _visible = 1) : null,
       ),
       Timer(
         const Duration(milliseconds: 700),
-        () => setState(() => _visible = 2),
+        () => mounted ? setState(() => _visible = 2) : null,
       ),
       Timer(
         const Duration(milliseconds: 1200),
-        () => setState(() => _visible = 3),
+        () => mounted ? setState(() => _visible = 3) : null,
       ),
     ];
   }
@@ -545,6 +545,8 @@ class _TopBarState extends State<_TopBar> with SingleTickerProviderStateMixin {
   @override
   void didUpdateWidget(covariant _TopBar oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Only react to actual changes — parent rebuilds must not restart it.
+    if (widget.running == oldWidget.running) return;
     if (widget.running) {
       _controller.repeat();
     } else {
@@ -560,7 +562,8 @@ class _TopBarState extends State<_TopBar> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
+    return RepaintBoundary(
+      child: AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
         return ShaderMask(
@@ -574,13 +577,13 @@ class _TopBarState extends State<_TopBar> with SingleTickerProviderStateMixin {
                 ...widget.colors,
                 Colors.transparent,
               ],
-              stops: const [0.0, 0.5, 1.0],
               transform: _SlidingTransform(_controller.value * 2 - 1),
             ).createShader(bounds);
           },
           child: Container(height: 3, color: Colors.white),
         );
       },
+      ),
     );
   }
 }

@@ -43,7 +43,7 @@ class _CommentSheetState extends State<CommentSheet> {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
     setState(() => _userComments.add(trimmed));
-    widget.onPosted(_userComments);
+    widget.onPosted(List.of(_userComments));
     _controller.clear();
     ToastService.instance.show('💬 Comment posted!');
   }

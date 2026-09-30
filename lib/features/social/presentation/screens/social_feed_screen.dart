@@ -112,27 +112,31 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
             children: [
               SafeArea(
                 bottom: false,
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.only(bottom: 110),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildHeader(state),
-                      if (_loading)
-                        const Padding(
+                // CustomScrollView + slivers so the (long) activity feed is
+                // built lazily instead of every card at once.
+                child: CustomScrollView(
+                  slivers: [
+                    SliverToBoxAdapter(child: _buildHeader(state)),
+                    if (_loading)
+                      const SliverToBoxAdapter(
+                        child: Padding(
                           padding: EdgeInsets.symmetric(horizontal: 20),
                           child: _FeedSkeleton(),
-                        )
-                      else ...[
-                        if (showBanner && _activeFilter == 'feed')
-                          Padding(
+                        ),
+                      )
+                    else ...[
+                      if (showBanner && _activeFilter == 'feed')
+                        SliverToBoxAdapter(
+                          child: Padding(
                             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                             child: _PointsBanner(
                               xp: state.xp,
                               onDismiss: () => setState(() => _bannerDismissed = true),
                             ),
                           ),
-                        ScrollableTabs(
+                        ),
+                      SliverToBoxAdapter(
+                        child: ScrollableTabs(
                           children: [
                             for (final f in _filters)
                               _FilterPill(
@@ -142,10 +146,11 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
                               ),
                           ],
                         ),
-                        _buildTabContent(state, profile),
-                      ],
+                      ),
+                      _buildTabContent(state, profile),
                     ],
-                  ),
+                    const SliverToBoxAdapter(child: SizedBox(height: 110)),
+                  ],
                 ),
               ),
               Positioned(
@@ -214,29 +219,35 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
     );
   }
 
+  /// Returns a sliver.
   Widget _buildTabContent(AppState state, dynamic profile) {
-    return switch (_activeFilter) {
-      'feed' => _buildFeedTab(state, profile),
-      'forYou' => _buildGridTab(mockForYouCards),
-      'trending' => _buildGridTab(mockTrendingCards, trending: true),
-      'following' => _buildFollowingTab(),
-      'creators' => _buildCreatorsTab(),
-      'events' => _buildEventsTab(),
-      _ => const SizedBox.shrink(),
-    };
+    if (_activeFilter == 'feed') return _buildFeedTab(state, profile);
+    return SliverToBoxAdapter(
+      child: switch (_activeFilter) {
+        'forYou' => _buildGridTab(mockForYouCards),
+        'trending' => _buildGridTab(mockTrendingCards, trending: true),
+        'following' => _buildFollowingTab(),
+        'creators' => _buildCreatorsTab(),
+        'events' => _buildEventsTab(),
+        _ => const SizedBox.shrink(),
+      },
+    );
   }
 
   // ── FEED TAB ──
 
+  /// Returns a sliver — activity cards are built lazily.
   Widget _buildFeedTab(AppState state, dynamic profile) {
     final sharedPost = state.sharedPost;
     final avatarEmoji = profile?.avatarEmoji ?? '🧑‍🍳';
-    return Padding(
+    final hasShared = sharedPost != null;
+    return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Column(
-        children: [
-          if (sharedPost != null)
-            ZoomIn(
+      sliver: SliverList.builder(
+        itemCount: mockActivityFeed.length + (hasShared ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (hasShared && index == 0) {
+            return ZoomIn(
               child: _YourPostCard(
                 avatarEmoji: avatarEmoji,
                 sharedPost: sharedPost,
@@ -247,41 +258,42 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
                 onShare: () => context.read<FlowCubit>().setScreen(AppScreen.shareSheet),
                 onOpenProfile: () => context.read<FlowCubit>().setScreen(AppScreen.profile),
               ),
+            );
+          }
+          final i = hasShared ? index - 1 : index;
+          final card = ZoomIn(
+            duration: Duration(milliseconds: 260 + i * 20),
+            child: _ActivityCard(
+              index: i,
+              activity: mockActivityFeed[i],
+              liked: _likedPosts.contains(i),
+              extraComments: _postedComments[i]?.length ?? 0,
+              onOpen: () {
+                final flow = context.read<FlowCubit>();
+                final type = mockActivityFeed[i].type;
+                if (type == 'text') {
+                  flow.setScreen(AppScreen.creatorProfile);
+                } else if (type == 'cooked' || type == 'created') {
+                  flow.setScreen(AppScreen.recipeDetail);
+                } else {
+                  flow.setScreen(AppScreen.creatorProfile);
+                }
+              },
+              onOpenProfile: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
+              onToggleLike: () => setState(() {
+                if (_likedPosts.contains(i)) {
+                  _likedPosts.remove(i);
+                } else {
+                  _likedPosts.add(i);
+                }
+              }),
+              onComment: () => setState(() => _commentSheetIndex = i),
+              onShare: () => context.read<FlowCubit>().setScreen(AppScreen.shareSheet),
             ),
-          for (var i = 0; i < mockActivityFeed.length; i++) ...[
-            if (i == 4) _buildSuggestedCreators(),
-            ZoomIn(
-              duration: Duration(milliseconds: 260 + i * 20),
-              child: _ActivityCard(
-                index: i,
-                activity: mockActivityFeed[i],
-                liked: _likedPosts.contains(i),
-                extraComments: _postedComments[i]?.length ?? 0,
-                onOpen: () {
-                  final flow = context.read<FlowCubit>();
-                  final type = mockActivityFeed[i].type;
-                  if (type == 'text') {
-                    flow.setScreen(AppScreen.creatorProfile);
-                  } else if (type == 'cooked' || type == 'created') {
-                    flow.setScreen(AppScreen.recipeDetail);
-                  } else {
-                    flow.setScreen(AppScreen.creatorProfile);
-                  }
-                },
-                onOpenProfile: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
-                onToggleLike: () => setState(() {
-                  if (_likedPosts.contains(i)) {
-                    _likedPosts.remove(i);
-                  } else {
-                    _likedPosts.add(i);
-                  }
-                }),
-                onComment: () => setState(() => _commentSheetIndex = i),
-                onShare: () => context.read<FlowCubit>().setScreen(AppScreen.shareSheet),
-              ),
-            ),
-          ],
-        ],
+          );
+          if (i != 4) return card;
+          return Column(children: [_buildSuggestedCreators(), card]);
+        },
       ),
     );
   }

@@ -5,6 +5,8 @@ import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/legal_links.dart';
+import '../../../../core/widgets/linked_text.dart';
 import '../blocs/auth_cubit.dart';
 import '../widgets/auth_widgets.dart';
 
@@ -113,6 +115,7 @@ class _EmailSignupScreenState extends State<EmailSignupScreen> {
             label: 'Password',
             hint: 'Min 8 characters',
             obscure: true,
+            showObscureToggle: true,
             onChanged: (_) => setState(() => _error = ''),
           ),
           const SizedBox(height: 16),
@@ -121,6 +124,7 @@ class _EmailSignupScreenState extends State<EmailSignupScreen> {
             label: 'Confirm Password',
             hint: '••••••••',
             obscure: true,
+            showObscureToggle: true,
             onChanged: (_) => setState(() => _error = ''),
           ),
           const SizedBox(height: 8),
@@ -145,13 +149,29 @@ class _EmailSignupScreenState extends State<EmailSignupScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            "By signing up, you agree to b🌶te's Terms of Service and Privacy Policy.",
+          const LinkedText(
+            segments: [
+              LinkedTextSegment("By signing up, you agree to b🌶te's "),
+              LinkedTextSegment(
+                'Terms of Service',
+                onTap: LegalLinks.openTerms,
+              ),
+              LinkedTextSegment(' and '),
+              LinkedTextSegment(
+                'Privacy Policy',
+                onTap: LegalLinks.openPrivacyPolicy,
+              ),
+              LinkedTextSegment('.'),
+            ],
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Color(0x33FFFFFF),
               fontSize: 11,
               height: 1.5,
+            ),
+            linkStyle: TextStyle(
+              color: AppColors.muted,
+              decoration: TextDecoration.underline,
             ),
           ),
         ],

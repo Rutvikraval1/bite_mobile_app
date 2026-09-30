@@ -46,7 +46,9 @@ class _ConfettiFallState extends State<ConfettiFall>
         duration: 2.4 + random.nextDouble() * 1.6,
         size: widget.particleSize * (0.6 + random.nextDouble() * 0.9),
         rotation: random.nextDouble() * math.pi * 2,
-        color: widget.colors[i % widget.colors.length],
+        color: widget.colors.isEmpty
+            ? Colors.white
+            : widget.colors[i % widget.colors.length],
         drift: (random.nextDouble() - 0.5) * 80,
       );
     });
@@ -62,7 +64,8 @@ class _ConfettiFallState extends State<ConfettiFall>
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: AnimatedBuilder(
+      child: RepaintBoundary(
+        child: AnimatedBuilder(
         animation: _controller,
         builder: (context, _) {
           return LayoutBuilder(
@@ -93,6 +96,7 @@ class _ConfettiFallState extends State<ConfettiFall>
             },
           );
         },
+        ),
       ),
     );
   }

@@ -446,6 +446,7 @@ class GenieStepWalkthrough extends StatelessWidget {
       flatSteps.map((f) => f.timelineIndex).toSet().length;
 
   String _nextDishLabel() {
+    if (flatSteps.isEmpty) return 'Next Dish';
     final idx = currentIndex.clamp(0, flatSteps.length - 1);
     final nextTimelineIndex = flatSteps[idx].timelineIndex + 1;
     final match = flatSteps.where((f) => f.timelineIndex == nextTimelineIndex);

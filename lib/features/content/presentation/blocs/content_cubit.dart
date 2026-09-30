@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../domain/entities/bite_card.dart';
@@ -69,6 +70,7 @@ class ContentCubit extends Cubit<ContentState> {
     if (userId == _userId) return;
     _userId = userId;
     if (userId == null) {
+      if (isClosed) return;
       emit(state.copyWith(
         savedItems: const [],
         mealPlans: const {},
@@ -81,6 +83,7 @@ class ContentCubit extends Cubit<ContentState> {
 
   /// Load the global catalog. Fetch-once; retry on error.
   Future<void> loadContent() async {
+    if (isClosed) return;
     emit(state.copyWith(loading: true, clearError: true));
     try {
       final catalog = await _repository.fetchContent();
@@ -102,19 +105,29 @@ class ContentCubit extends Cubit<ContentState> {
 
   Future<void> reloadSaved() async {
     final userId = _userId;
-    if (userId == null) return;
+    if (userId == null || isClosed) return;
     emit(state.copyWith(savedLoading: true));
-    final items = await _repository.fetchSavedItems(userId);
-    if (isClosed) return;
-    emit(state.copyWith(savedItems: items, savedLoading: false));
+    try {
+      final items = await _repository.fetchSavedItems(userId);
+      if (isClosed || userId != _userId) return;
+      emit(state.copyWith(savedItems: items, savedLoading: false));
+    } catch (e) {
+      debugPrint('[content] reloadSaved failed: $e');
+      if (isClosed) return;
+      emit(state.copyWith(savedLoading: false));
+    }
   }
 
   Future<void> reloadMealPlans() async {
     final userId = _userId;
-    if (userId == null) return;
-    final plans = await _repository.fetchMealPlans(userId);
-    if (isClosed) return;
-    emit(state.copyWith(mealPlans: plans));
+    if (userId == null || isClosed) return;
+    try {
+      final plans = await _repository.fetchMealPlans(userId);
+      if (isClosed || userId != _userId) return;
+      emit(state.copyWith(mealPlans: plans));
+    } catch (e) {
+      debugPrint('[content] reloadMealPlans failed: $e');
+    }
   }
 
   /// Best-effort swipe logging; never affects deck UX.
@@ -126,13 +139,17 @@ class ContentCubit extends Cubit<ContentState> {
   }) async {
     final userId = _userId;
     if (userId == null) return;
-    await _repository.recordSwipe(
-      userId,
-      itemType: itemType,
-      itemId: itemId,
-      action: action,
-      cuisine: cuisine,
-    );
+    try {
+      await _repository.recordSwipe(
+        userId,
+        itemType: itemType,
+        itemId: itemId,
+        action: action,
+        cuisine: cuisine,
+      );
+    } catch (e) {
+      debugPrint('[content] recordSwipe failed (non-critical): $e');
+    }
   }
 
   Future<ContentWriteResult> saveItem(BiteCard card, String itemType) async {
@@ -140,8 +157,13 @@ class ContentCubit extends Cubit<ContentState> {
     if (userId == null) {
       return ContentWriteResult.failure('Not authenticated');
     }
-    final result = await _repository.saveItem(userId, card, itemType);
-    if (result.isSuccess) await reloadSaved();
+    final ContentWriteResult result;
+    try {
+      result = await _repository.saveItem(userId, card, itemType);
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
+    }
+    if (result.isSuccess && !isClosed) await reloadSaved();
     return result;
   }
 
@@ -150,8 +172,13 @@ class ContentCubit extends Cubit<ContentState> {
     if (userId == null) {
       return ContentWriteResult.failure('Not authenticated');
     }
-    final result = await _repository.removeSavedItem(userId, id);
-    if (result.isSuccess) {
+    final ContentWriteResult result;
+    try {
+      result = await _repository.removeSavedItem(userId, id);
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
+    }
+    if (result.isSuccess && !isClosed) {
       emit(state.copyWith(
         savedItems: state.savedItems.where((s) => s.id != id).toList(),
       ));
@@ -170,22 +197,31 @@ class ContentCubit extends Cubit<ContentState> {
     if (userId == null) {
       return ContentWriteResult.failure('Not authenticated');
     }
-    final result = await _repository.addMealPlan(
-      userId,
-      planDate: planDate,
-      mealSlot: mealSlot,
-      title: title,
-      emoji: emoji,
-      color: color,
-    );
+    final ContentWriteResult<MealPlan> result;
+    try {
+      result = await _repository.addMealPlan(
+        userId,
+        planDate: planDate,
+        mealSlot: mealSlot,
+        title: title,
+        emoji: emoji,
+        color: color,
+      );
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
+    }
     final meal = result.data;
-    if (result.isSuccess && meal != null) {
+    if (result.isSuccess && meal != null && !isClosed) {
+      // Copy the touched day/slot instead of mutating the previous state's
+      // nested collections (which may be shared or unmodifiable).
       final next = Map<String, Map<String, List<MealPlan>>>.from(
         state.mealPlans,
       );
-      next.putIfAbsent(meal.planDate, () => {});
-      next[meal.planDate]!.putIfAbsent(meal.mealSlot, () => []);
-      next[meal.planDate]![meal.mealSlot]!.add(meal);
+      final day = Map<String, List<MealPlan>>.from(
+        next[meal.planDate] ?? const {},
+      );
+      day[meal.mealSlot] = [...?day[meal.mealSlot], meal];
+      next[meal.planDate] = day;
       emit(state.copyWith(mealPlans: next));
     }
     return result;
@@ -196,8 +232,13 @@ class ContentCubit extends Cubit<ContentState> {
     if (userId == null) {
       return ContentWriteResult.failure('Not authenticated');
     }
-    final result = await _repository.removeMealPlan(userId, mealId);
-    if (result.isSuccess) {
+    final ContentWriteResult result;
+    try {
+      result = await _repository.removeMealPlan(userId, mealId);
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
+    }
+    if (result.isSuccess && !isClosed) {
       final next = <String, Map<String, List<MealPlan>>>{};
       state.mealPlans.forEach((date, slots) {
         final filteredSlots = <String, List<MealPlan>>{};

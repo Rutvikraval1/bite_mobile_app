@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -17,6 +15,8 @@ import '../../../cooking/domain/cook_session.dart';
 import '../../domain/entities/bite_card.dart';
 import '../blocs/content_cubit.dart';
 import '../widgets/social_comments_block.dart';
+import '../../../../core/widgets/app_network_image.dart';
+import '../widgets/sheet_backdrop_blur.dart';
 
 /// Recipe / drink detail sheet — ports `RecipeDetailScreen` from
 /// `screens-detail.jsx`. Reached from the swipe deck for non-place cards.
@@ -40,14 +40,19 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppStateCubit>().state;
+    // Only rebuild for the two AppState fields this screen reads (not on
+    // every XP / coin / flag change).
+    final subTab = context.select<AppStateCubit, DeckTab>((c) => c.state.subTab);
+    final activeCardIndex = context.select<AppStateCubit, int>(
+      (c) => c.state.activeCardIndex,
+    );
     final content = context.watch<ContentCubit>().state;
-    final deck = appState.subTab == DeckTab.drinks
+    final deck = subTab == DeckTab.drinks
         ? content.drinks
         : content.recipes;
     final card = deck.isEmpty
         ? null
-        : deck[appState.activeCardIndex % deck.length];
+        : deck[activeCardIndex % deck.length];
 
     if (card == null) {
       return ColoredBox(
@@ -68,7 +73,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       );
     }
 
-    final isDrink = appState.subTab == DeckTab.drinks;
+    final isDrink = subTab == DeckTab.drinks;
     final themeColor = isDrink ? AppColors.drinksBlue : AppColors.coral;
     final baseServings = isDrink
         ? CookData.baseServingsDrink
@@ -86,8 +91,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       color: Colors.black.withValues(alpha: 0.6),
       child: GestureDetector(
         onTap: () => context.read<FlowCubit>().goBack(),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: SheetBackdropBlur(
           child: Align(
             alignment: Alignment.bottomCenter,
             child: FractionallySizedBox(
@@ -289,11 +293,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                 : null,
           ),
           if (card.image != null && card.image!.isNotEmpty)
-            Image.network(
-              card.image!,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => const SizedBox.shrink(),
-            ),
+            AppNetworkImage(card.image!),
           Positioned(
             top: 12,
             right: 16,
@@ -363,7 +363,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
   Widget _statsRow(BiteCard card, bool isDrink) {
     const peppers = ['🫑', '🟡', '🟠', '🍊', '🌶'];
-    final heatStr = peppers.take(card.heat).join();
+    final heatStr = peppers.take(card.heat.clamp(0, peppers.length)).join();
     final text =
         '${card.time} · ${isDrink ? '🍸' : '🔥'} ${card.diff} · ${isDrink ? '🥃 Yields ${card.serves}' : '🍽 Serves ${card.serves}'}${heatStr.isNotEmpty ? ' · $heatStr' : ''}';
     return Row(
@@ -1586,8 +1586,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     });
     ToastService.instance.show('🛒 Ordered via $serviceName!');
     Future<void>.delayed(const Duration(milliseconds: 600), () {
-      if (mounted)
+      if (mounted) {
         _showReadyToCookDialog(card, isDrink, themeColor, ingredients.length);
+      }
     });
   }
 
@@ -1602,6 +1603,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         return StatefulBuilder(
           builder: (sheetCtx, setSheetState) {
             void toggle(SideDish side) {
+              if (!mounted) return;
               final already = _addedSides.any((s) => s.name == side.name);
               if (already) {
                 setState(

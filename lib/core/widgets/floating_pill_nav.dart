@@ -21,6 +21,8 @@ class FloatingPillNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<AppStateCubit, AppState>(
+      // Only the active tab affects the nav; skip rebuilds for XP/coins/etc.
+      buildWhen: (prev, next) => prev.activeTab != next.activeTab,
       builder: (context, state) {
         return Positioned(
           left: 16,

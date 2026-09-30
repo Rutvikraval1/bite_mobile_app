@@ -25,14 +25,41 @@ abstract final class AppEnv {
   );
 
   static String get supabaseUrl {
-    final fromEnv = dotenv.maybeGet('SUPABASE_URL');
+    final fromEnv = _runtime('SUPABASE_URL');
     return _compileUrl.isNotEmpty ? _compileUrl : (fromEnv ?? '');
   }
 
   static String get supabaseAnonKey {
-    final fromEnv = dotenv.maybeGet('SUPABASE_ANON_KEY');
+    final fromEnv = _runtime('SUPABASE_ANON_KEY');
     return _compileAnonKey.isNotEmpty ? _compileAnonKey : (fromEnv ?? '');
   }
+
+  static const String _compileTermsUrl = String.fromEnvironment(
+    'TERMS_URL',
+    defaultValue: '',
+  );
+
+  static const String _compilePrivacyPolicyUrl = String.fromEnvironment(
+    'PRIVACY_POLICY_URL',
+    defaultValue: '',
+  );
+
+  static String get termsUrl {
+    final fromEnv = _runtime('TERMS_URL');
+    return _compileTermsUrl.isNotEmpty ? _compileTermsUrl : (fromEnv ?? '');
+  }
+
+  static String get privacyPolicyUrl {
+    final fromEnv = _runtime('PRIVACY_POLICY_URL');
+    return _compilePrivacyPolicyUrl.isNotEmpty
+        ? _compilePrivacyPolicyUrl
+        : (fromEnv ?? '');
+  }
+
+  /// Runtime lookup that tolerates a missing/failed `.env` load (dotenv
+  /// throws NotInitializedError when read before a successful load).
+  static String? _runtime(String name) =>
+      dotenv.isInitialized ? dotenv.maybeGet(name) : null;
 
   static const String demoKey = String.fromEnvironment(
     'DEMO_KEY',

@@ -270,7 +270,7 @@ class _TransitionOverlay extends StatefulWidget {
 class _TransitionOverlayState extends State<_TransitionOverlay>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
-  late final Animation<double> _opacity;
+  late final CurvedAnimation _opacity;
 
   @override
   void initState() {
@@ -297,6 +297,7 @@ class _TransitionOverlayState extends State<_TransitionOverlay>
 
   @override
   void dispose() {
+    _opacity.dispose();
     _controller.dispose();
     super.dispose();
   }

@@ -101,6 +101,13 @@ class _PremiumScreenState extends State<PremiumScreen> {
   bool _showCharity = false;
   bool _subscribing = false;
 
+  String _tierName(String? id) {
+    for (final t in _tiers) {
+      if (t.id == id) return t.name;
+    }
+    return 'Premium';
+  }
+
   Future<void> _confirmSubscribe() async {
     final tierId = _selectedTier;
     if (tierId == null) return;
@@ -111,7 +118,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
     final flow = context.read<FlowCubit>();
     final userId = authCubit.state.user?.id;
     if (userId != null) {
-      await authCubit.updateProfile({'is_premium': true, 'user_tier': tierId});
+      try {
+        await authCubit.updateProfile({'is_premium': true, 'user_tier': tierId});
+      } catch (_) {
+        // A failed write is treated like a failure result: local state below
+        // still applies, and the spinner must not get stuck on.
+      }
     }
     PremiumGateService.instance.setPremiumState(premium: true, tier: tierId);
 
@@ -124,9 +136,11 @@ class _PremiumScreenState extends State<PremiumScreen> {
       _subscribing = false;
       _showCharity = false;
     });
-    final tierName = _tiers.firstWhere((t) => t.id == tierId).name;
+    final tierName = _tierName(tierId);
     context.showToast("🎉 You're now a $tierName member!");
-    Future<void>.delayed(const Duration(milliseconds: 800), flow.goBack);
+    Future<void>.delayed(const Duration(milliseconds: 800), () {
+      if (mounted) flow.goBack();
+    });
   }
 
   @override
@@ -206,7 +220,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                             return;
                           }
                           if (currentTier == _selectedTier) {
-                            final name = _tiers.firstWhere((t) => t.id == _selectedTier).name;
+                            final name = _tierName(_selectedTier);
                             context.showToast("You're already on $name!");
                             return;
                           }
@@ -229,8 +243,8 @@ class _PremiumScreenState extends State<PremiumScreen> {
                             _selectedTier == null
                                 ? 'Select a plan'
                                 : currentTier == _selectedTier
-                                    ? 'Currently on ${_tiers.firstWhere((t) => t.id == _selectedTier).name} ✓'
-                                    : 'Subscribe to ${_tiers.firstWhere((t) => t.id == _selectedTier).name}',
+                                    ? 'Currently on ${_tierName(_selectedTier)} ✓'
+                                    : 'Subscribe to ${_tierName(_selectedTier)}',
                             style: TextStyle(
                               color: _selectedTier == null
                                   ? AppColors.muted

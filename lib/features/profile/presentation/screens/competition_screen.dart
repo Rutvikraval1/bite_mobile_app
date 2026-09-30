@@ -32,7 +32,8 @@ class _CompetitionScreenState extends State<CompetitionScreen> {
   String _mainTab = 'competitions';
   String _cookoffFilter = 'active';
 
-  CompetitionTier get _tier => CompetitionData.tiers.firstWhere((t) => t.id == _tierId);
+  CompetitionTier get _tier => CompetitionData.tiers
+      .firstWhere((t) => t.id == _tierId, orElse: () => CompetitionData.tiers.first);
 
   @override
   Widget build(BuildContext context) {

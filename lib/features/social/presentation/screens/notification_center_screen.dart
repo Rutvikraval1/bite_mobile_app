@@ -94,12 +94,14 @@ class _NotificationCenterScreenState extends State<NotificationCenterScreen> {
                 target: _rating!,
                 onClose: () => setState(() => _rating = null),
                 onShared: (result) {
+                  final target = _rating;
+                  if (!mounted || target == null) return;
                   context.read<AppStateCubit>().setSharedPost(SharedPost(
                         rating: result.rating,
                         comment: result.comment.isEmpty ? 'Just rated!' : result.comment,
                         photo: result.photo ? 'added' : null,
-                        name: _rating!.name,
-                        emoji: _rating!.emoji,
+                        name: target.name,
+                        emoji: target.emoji,
                       ));
                   setState(() => _rating = null);
                 },

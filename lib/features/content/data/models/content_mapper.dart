@@ -20,7 +20,7 @@ abstract final class ContentMapper {
         image: r['image_url'] as String?,
         cuisine: (r['cuisine'] as String?) ?? '',
         gradient: (r['gradient'] as String?) ?? '',
-        tags: ((r['tags'] as List?) ?? const []).cast<String>(),
+        tags: ((r['tags'] as List?) ?? const []).whereType<String>().toList(),
       );
 
   static BiteCard drinkFromRow(Map<String, dynamic> d) => BiteCard(
@@ -38,7 +38,7 @@ abstract final class ContentMapper {
         image: d['image_url'] as String?,
         cuisine: (d['cuisine'] as String?) ?? 'Various',
         gradient: (d['gradient'] as String?) ?? '',
-        tags: ((d['tags'] as List?) ?? const []).cast<String>(),
+        tags: ((d['tags'] as List?) ?? const []).whereType<String>().toList(),
       );
 
   static BiteCard placeFromRow(Map<String, dynamic> p) => BiteCard(
@@ -56,7 +56,7 @@ abstract final class ContentMapper {
         image: p['image_url'] as String?,
         cuisine: (p['cuisine'] as String?) ?? '',
         gradient: (p['gradient'] as String?) ?? '',
-        tags: ((p['tags'] as List?) ?? const []).cast<String>(),
+        tags: ((p['tags'] as List?) ?? const []).whereType<String>().toList(),
         address: p['address'] as String?,
         phone: p['phone'] as String?,
         rating: ((p['rating'] as num?)?.toDouble()),
@@ -65,7 +65,7 @@ abstract final class ContentMapper {
         hours: p['hours'] as String?,
         status: p['status'] as String?,
         distance: p['distance'] as String?,
-        photos: ((p['photos'] as List?) ?? const []).cast<String>(),
+        photos: ((p['photos'] as List?) ?? const []).whereType<String>().toList(),
         menuHighlights: _highlights(p['menu_highlights']),
       );
 

@@ -199,9 +199,14 @@ class GenieScreen extends StatelessWidget {
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: flow.goBack,
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                  child: Container(color: Colors.black.withValues(alpha: 0.7)),
+                // ClipRect bounds the blur to this layer's own rect.
+                child: ClipRect(
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.7),
+                    ),
+                  ),
                 ),
               ),
               SafeArea(

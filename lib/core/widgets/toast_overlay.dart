@@ -23,6 +23,7 @@ class _ToastOverlayState extends State<ToastOverlay> {
   void initState() {
     super.initState();
     _sub = ToastService.instance.stream.listen((message) {
+      if (!mounted) return;
       setState(() => _current = message);
       _hideTimer?.cancel();
       _hideTimer = Timer(ToastService.instance.displayDuration, () {
