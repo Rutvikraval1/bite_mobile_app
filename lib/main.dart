@@ -7,6 +7,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'app.dart';
 import 'core/config/app_env.dart';
 import 'core/services/first_launch_service.dart';
+import 'core/services/push_service.dart';
 import 'core/theme/app_colors.dart';
 
 Future<void> main() async {
@@ -21,6 +22,7 @@ Future<void> main() async {
   }
   AppEnv.validate();
   await FirstLaunchService.instance.load();
+  await PushService.instance.init();
   runApp(const BiteApp());
 }
 

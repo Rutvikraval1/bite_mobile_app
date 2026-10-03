@@ -18,6 +18,7 @@ import '../../../../core/widgets/scrollable_tabs.dart';
 import '../../../../core/widgets/social_proof_avatars.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../data/mock_social_data.dart';
+import '../blocs/follow_cubit.dart';
 import '../widgets/comment_sheet.dart';
 
 /// Filter/sub-nav pills for the activity wall.
@@ -62,7 +63,6 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
   int? _commentSheetIndex; // -1 = the user's own shared post
   final Map<int, List<String>> _postedComments = {};
   bool _myPostLiked = false;
-  final Set<String> _followedSuggested = {};
 
   @override
   void initState() {
@@ -250,6 +250,7 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
             return ZoomIn(
               child: _YourPostCard(
                 avatarEmoji: avatarEmoji,
+                avatarUrl: profile?.avatarUrl as String?,
                 sharedPost: sharedPost,
                 liked: _myPostLiked,
                 commentCount: _postedComments[-1]?.length ?? 0,
@@ -321,30 +322,23 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
           ),
           SizedBox(
             height: 172,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: mockSuggestedCreators.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 10),
-              itemBuilder: (context, i) {
-                final user = mockSuggestedCreators[i];
-                final followed = _followedSuggested.contains(user.handle);
-                return _SuggestedCreatorCard(
-                  user: user,
-                  followed: followed,
-                  onFollow: () {
-                    setState(() {
-                      if (followed) {
-                        _followedSuggested.remove(user.handle);
-                      } else {
-                        _followedSuggested.add(user.handle);
-                      }
-                    });
-                    ToastService.instance
-                        .show(followed ? 'Unfollowed ${user.handle}' : '✅ Following ${user.handle}!');
-                  },
-                  onOpen: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
-                );
-              },
+            // Read follows here, not inside itemBuilder: provider forbids
+            // context.select/watch in lazily built list items.
+            child: BlocBuilder<FollowCubit, Set<String>>(
+              builder: (context, follows) => ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: mockSuggestedCreators.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 10),
+                itemBuilder: (context, i) {
+                  final user = mockSuggestedCreators[i];
+                  return _SuggestedCreatorCard(
+                    user: user,
+                    followed: follows.contains(FollowCubit.normalize(user.handle)),
+                    onFollow: () => context.read<FollowCubit>().toggle(user.handle),
+                    onOpen: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -675,6 +669,7 @@ class _PointsBanner extends StatelessWidget {
 class _YourPostCard extends StatelessWidget {
   const _YourPostCard({
     required this.avatarEmoji,
+    this.avatarUrl,
     required this.sharedPost,
     required this.liked,
     required this.commentCount,
@@ -685,6 +680,7 @@ class _YourPostCard extends StatelessWidget {
   });
 
   final String avatarEmoji;
+  final String? avatarUrl;
   final SharedPost sharedPost;
   final bool liked;
   final int commentCount;
@@ -732,7 +728,9 @@ class _YourPostCard extends StatelessWidget {
                     gradient: LinearGradient(colors: [AppColors.coral, AppColors.amber]),
                   ),
                   alignment: Alignment.center,
-                  child: Text(avatarEmoji, style: const TextStyle(fontSize: 16)),
+                  child: avatarUrl != null
+                      ? AvatarImg(emoji: avatarEmoji, imageUrl: avatarUrl, size: 36, borderWidth: 0)
+                      : Text(avatarEmoji, style: const TextStyle(fontSize: 16)),
                 ),
               ),
               const SizedBox(width: 10),

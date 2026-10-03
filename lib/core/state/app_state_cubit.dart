@@ -1,6 +1,7 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../features/auth/domain/entities/profile.dart';
+import '../../features/content/domain/entities/bite_card.dart';
 import '../../features/content/domain/entities/meal_plan.dart';
 import '../constants/badge_catalog.dart';
 import '../services/xp_float_service.dart';
@@ -90,8 +91,14 @@ class AppStateCubit extends Cubit<AppState> {
   void setTrendingMode(bool value) =>
       emit(state.copyWith(trendingMode: value));
 
-  void setActiveCardIndex(int index) =>
-      emit(state.copyWith(activeCardIndex: index));
+  /// Opening a deck card clears any recipe picked from elsewhere.
+  void setActiveCardIndex(int index) => emit(
+        state.copyWith(activeCardIndex: index, clearSelectedRecipe: true),
+      );
+
+  /// Show [card] in Recipe Detail (used outside the swipe deck).
+  void viewRecipe(BiteCard card) =>
+      emit(state.copyWith(selectedRecipe: card));
 
   void setNotificationCount(int count) =>
       emit(state.copyWith(notificationCount: count));
@@ -146,6 +153,21 @@ class AppStateCubit extends Cubit<AppState> {
   }
 
   void resetHydration() => emit(state.copyWith(hydrated: false));
+
+  /// Gamification fields persisted to `profiles`. Used to detect changes
+  /// worth syncing (see `_FlowHost`).
+  Map<String, dynamic> get persistedFields => {
+        'xp': state.xp,
+        'bite_coins': state.biteCoins,
+        'streak_count': state.streakCount,
+        'longest_streak': state.longestStreak,
+        'streak_multiplier': state.streakMultiplier,
+        'streak_freezes': state.streakFreezes,
+        'daily_chest_claimed': state.dailyChestClaimed,
+        'badges': state.userBadges,
+        'age_verified': state.ageVerified,
+        'location_granted': state.locationGranted,
+      };
 
   /// Reset to guest defaults — mirrors `restartDemo` for logged-out users.
   void resetToGuest() {

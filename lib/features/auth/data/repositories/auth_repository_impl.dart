@@ -155,6 +155,18 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
+  Future<AuthResult> updateEmail(String newEmail) async {
+    try {
+      await _auth.updateUser(UserAttributes(email: newEmail.trim()));
+      return const AuthResult();
+    } on AuthException catch (e) {
+      return AuthResult.failure(e.message);
+    } catch (e) {
+      return AuthResult.failure(e.toString());
+    }
+  }
+
+  @override
   Future<AuthResult> markOnboarded() async {
     try {
       await _auth.updateUser(UserAttributes(data: {'onboarded': true}));
@@ -215,6 +227,16 @@ class AuthRepositoryImpl implements AuthRepository {
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'id');
       return ProfileWriteResult.ok;
+    } on PostgrestException catch (e) {
+      // 23505 = unique_violation (profiles_username_unique).
+      return ProfileWriteResult(
+        error: e.code == '23505'
+            ? 'That username is already taken'
+            // PGRST204 / 42703 = unknown column (migration not applied).
+            : e.code == 'PGRST204' || e.code == '42703'
+                ? 'Database is out of date — run the latest Supabase migration'
+                : e.message,
+      );
     } catch (e) {
       return ProfileWriteResult(error: e.toString());
     }

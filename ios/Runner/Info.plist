@@ -66,5 +66,13 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>b🌶te uses the camera to take your profile and recipe photos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>b🌶te uses your photo library to pick profile and recipe photos.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

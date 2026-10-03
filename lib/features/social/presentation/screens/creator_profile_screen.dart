@@ -13,6 +13,7 @@ import '../../../../core/widgets/glass.dart';
 import '../../../content/data/image_urls.dart';
 import '../../data/chat_selection.dart';
 import '../../../../core/widgets/app_network_image.dart';
+import '../blocs/follow_cubit.dart';
 
 /// Creator profile — ports `CreatorProfileScreen` from `screens-social.jsx`.
 ///
@@ -599,21 +600,23 @@ class _FollowButton extends StatefulWidget {
 }
 
 class _FollowButtonState extends State<_FollowButton> {
-  bool _following = false;
+  /// This showcase screen always renders @chefpriya (see class docs above).
+  static const _handle = '@chefpriya';
 
   @override
   Widget build(BuildContext context) {
+    final following = context.select<FollowCubit, bool>((f) => f.isFollowing(_handle));
     return GestureDetector(
-      onTap: () => setState(() => _following = !_following),
+      onTap: () => context.read<FollowCubit>().toggle(_handle),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
         decoration: BoxDecoration(
-          color: _following ? Colors.transparent : AppColors.coral,
+          color: following ? Colors.transparent : AppColors.coral,
           borderRadius: BorderRadius.circular(100),
-          border: _following ? Border.all(color: AppColors.coral) : null,
+          border: following ? Border.all(color: AppColors.coral) : null,
         ),
-        child: Text(_following ? '✓ Following' : 'Follow',
+        child: Text(following ? '✓ Following' : 'Follow',
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
       ),
     );

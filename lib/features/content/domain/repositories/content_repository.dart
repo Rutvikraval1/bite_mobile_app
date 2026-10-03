@@ -1,4 +1,6 @@
 import '../entities/bite_card.dart';
+import '../entities/cook_entry.dart';
+import '../entities/recipe_draft.dart';
 import '../entities/meal_plan.dart';
 import '../entities/saved_item.dart';
 
@@ -70,6 +72,32 @@ abstract interface class ContentRepository {
 
   /// Remove a meal from the current user's plan.
   Future<ContentWriteResult> removeMealPlan(String userId, String mealId);
+
+  /// Recipes created by [userId] (published and drafts), newest first.
+  Future<List<BiteCard>> fetchMyRecipes(String userId);
+
+  /// Insert a user recipe; returns the saved row.
+  Future<ContentWriteResult<BiteCard>> createRecipe(
+    String userId,
+    String creator,
+    RecipeDraft draft,
+  );
+
+  /// Delete one of the user's own recipes.
+  Future<ContentWriteResult> deleteRecipe(String userId, int recipeId);
+
+  /// The user's cooking history, newest first.
+  Future<List<CookEntry>> fetchCookHistory(String userId);
+
+  /// Record that the user cooked a recipe.
+  Future<ContentWriteResult> logCook(
+    String userId, {
+    required String title,
+    required String emoji,
+    int? recipeId,
+    String? imageUrl,
+    int? rating,
+  });
 
   /// Log a swipe interaction. Best-effort — swipe UX must never break
   /// if analytics logging fails.

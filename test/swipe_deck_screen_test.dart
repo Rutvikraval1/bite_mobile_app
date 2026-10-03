@@ -7,11 +7,15 @@ import 'package:bite/features/auth/domain/entities/profile.dart';
 import 'package:bite/features/auth/domain/repositories/auth_repository.dart';
 import 'package:bite/features/auth/presentation/blocs/auth_cubit.dart';
 import 'package:bite/features/content/domain/entities/bite_card.dart';
+import 'package:bite/features/content/domain/entities/cook_entry.dart';
 import 'package:bite/features/content/domain/entities/meal_plan.dart';
+import 'package:bite/features/content/domain/entities/recipe_draft.dart';
 import 'package:bite/features/content/domain/entities/saved_item.dart';
 import 'package:bite/features/content/domain/repositories/content_repository.dart';
 import 'package:bite/features/content/presentation/blocs/content_cubit.dart';
 import 'package:bite/features/home/presentation/screens/swipe_deck_screen.dart';
+import 'package:bite/features/social/data/follow_repository.dart';
+import 'package:bite/features/social/presentation/blocs/follow_cubit.dart';
 import 'package:bite/features/home/presentation/widgets/deck_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -48,6 +52,9 @@ class _FakeAuthRepo implements AuthRepository {
   Future<AuthResult> markOnboarded() async => const AuthResult();
 
   @override
+  Future<AuthResult> updateEmail(String newEmail) async => const AuthResult();
+
+  @override
   Future<AuthResult> updatePassword(String newPassword) async =>
       const AuthResult();
 
@@ -78,6 +85,35 @@ class _FakeAuthRepo implements AuthRepository {
 }
 
 class _FakeContentRepo implements ContentRepository {
+  @override
+  Future<List<BiteCard>> fetchMyRecipes(String userId) async => const [];
+
+  @override
+  Future<ContentWriteResult<BiteCard>> createRecipe(
+    String userId,
+    String creator,
+    RecipeDraft draft,
+  ) async =>
+      const ContentWriteResult.ok();
+
+  @override
+  Future<ContentWriteResult> deleteRecipe(String userId, int recipeId) async =>
+      const ContentWriteResult.ok();
+
+  @override
+  Future<List<CookEntry>> fetchCookHistory(String userId) async => const [];
+
+  @override
+  Future<ContentWriteResult> logCook(
+    String userId, {
+    required String title,
+    required String emoji,
+    int? recipeId,
+    String? imageUrl,
+    int? rating,
+  }) async =>
+      const ContentWriteResult.ok();
+
   static final recipes = [
     const BiteCard(
       id: 1,
@@ -224,6 +260,8 @@ Widget _wrap() {
           create: (_) => ContentCubit(_FakeContentRepo())),
       BlocProvider<AppStateCubit>(create: (_) => AppStateCubit()),
       BlocProvider<FlowCubit>(create: (_) => FlowCubit()),
+      // Never bound to a user in tests, so it makes no network calls.
+      BlocProvider<FollowCubit>(create: (_) => FollowCubit(FollowRepository())),
     ],
     child: const MaterialApp(home: SwipeDeckScreen()),
   );

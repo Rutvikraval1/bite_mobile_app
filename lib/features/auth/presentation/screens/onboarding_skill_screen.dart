@@ -8,6 +8,7 @@ import '../../../../core/services/xp_float_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../blocs/auth_cubit.dart';
+import '../onboarding_edit_mode.dart';
 import '../widgets/auth_widgets.dart';
 import '../widgets/onboarding_scaffold.dart';
 
@@ -44,8 +45,12 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
     ),
   ];
   static const _goalOptions = [
-    'Find new recipes 🍽', 'Eat healthier 🥗', 'Learn to cook 📚',
-    'Share my recipes 📸', 'Meal prep 📦', 'Just for fun 🎉',
+    'Find new recipes 🍽',
+    'Eat healthier 🥗',
+    'Learn to cook 📚',
+    'Share my recipes 📸',
+    'Meal prep 📦',
+    'Just for fun 🎉',
     'Find cooking community 👥',
   ];
   static const _spicePeppers = [
@@ -84,8 +89,7 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
   void _addPts(String key, int pts) {
     if (_earnedKeys.contains(key)) return;
     setState(() => _earnedKeys.add(key));
-    XpFloatService.instance
-        .show(pts, x: 20 + (pts % 60).toDouble(), y: 35);
+    XpFloatService.instance.show(pts, x: 20 + (pts % 60).toDouble(), y: 35);
   }
 
   bool _saving = false;
@@ -117,14 +121,20 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
         _goals.remove(g);
         if (withinRange) {
           _earnedKeys.remove('goal-${_goals.length + 1}');
-          XpFloatService.instance
-              .show(-5, x: 15 + (g.hashCode.abs() % 70).toDouble(), y: 35);
+          XpFloatService.instance.show(
+            -5,
+            x: 15 + (g.hashCode.abs() % 70).toDouble(),
+            y: 35,
+          );
         }
       } else {
         _goals.add(g);
         if (_goals.length <= 2) {
-          XpFloatService.instance
-              .show(5, x: 15 + (g.hashCode.abs() % 70).toDouble(), y: 35);
+          XpFloatService.instance.show(
+            5,
+            x: 15 + (g.hashCode.abs() % 70).toDouble(),
+            y: 35,
+          );
         }
       }
     });
@@ -148,8 +158,11 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
     });
     for (var i = 0; i < earnedCount; i++) {
       Future<void>.delayed(Duration(milliseconds: i * 120), () {
-        XpFloatService.instance
-            .show(-5, x: 25 + (i * 30) % 60, y: 35 + (i % 2) * 12);
+        XpFloatService.instance.show(
+          -5,
+          x: 25 + (i * 30) % 60,
+          y: 35 + (i % 2) * 12,
+        );
       });
     }
   }
@@ -164,8 +177,16 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
       step: 3,
       title: 'How well do you cook?',
       subtitle: "No judgment — we'll match recipes to your level.",
-      onSkip: () => setState(() => _showSkipConfirm = true),
-      onBack: () => flow.setScreen(AppScreen.onboardingDietary),
+      onSkip: () {
+        if (!OnboardingEditMode.exit(flow)) {
+          setState(() => _showSkipConfirm = true);
+        }
+      },
+      onBack: () {
+        if (!OnboardingEditMode.exit(flow)) {
+          flow.setScreen(AppScreen.onboardingDietary);
+        }
+      },
       overlay: _showSkipConfirm
           ? OnboardingSkipDialog(
               title: 'Skip skill & preferences?',
@@ -204,12 +225,20 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
           const SizedBox(height: 4),
           Text(
             "We'll recommend recipes that match your heat tolerance.",
-            style: TextStyle(color: AppColors.muted, fontSize: 12, fontFamily: 'Inter'),
+            style: TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              fontFamily: 'Inter',
+            ),
           ),
           const SizedBox(height: 12),
-          _SliderRow(levels: _spicePeppers, value: _spiceLevel, onTap: (i) {
-            setState(() => _spiceLevel = i);
-          }),
+          _SliderRow(
+            levels: _spicePeppers,
+            value: _spiceLevel,
+            onTap: (i) {
+              setState(() => _spiceLevel = i);
+            },
+          ),
           const SizedBox(height: 6),
           Text(
             '${_spicePeppers[_spiceLevel].label} heat',
@@ -234,12 +263,20 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
           const SizedBox(height: 4),
           Text(
             'For desserts, drinks, and sauces.',
-            style: TextStyle(color: AppColors.muted, fontSize: 12, fontFamily: 'Inter'),
+            style: TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              fontFamily: 'Inter',
+            ),
           ),
           const SizedBox(height: 12),
-          _SliderRow(levels: _sweetLevels, value: _sweetLevel, onTap: (i) {
-            setState(() => _sweetLevel = i);
-          }),
+          _SliderRow(
+            levels: _sweetLevels,
+            value: _sweetLevel,
+            onTap: (i) {
+              setState(() => _sweetLevel = i);
+            },
+          ),
           const SizedBox(height: 6),
           Text(
             _sweetLevels[_sweetLevel].label,
@@ -267,7 +304,11 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
             children: [
               Text(
                 'Pick all that apply.',
-                style: TextStyle(color: AppColors.muted, fontSize: 13, fontFamily: 'Inter'),
+                style: TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 13,
+                  fontFamily: 'Inter',
+                ),
               ),
               Row(
                 children: [
@@ -318,15 +359,15 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
             _completeness >= 4
                 ? '🔥 Perfect — your deck will be fire!'
                 : _completeness >= 2
-                    ? 'Almost there — ${_skill == null ? 'pick a skill level' : '${_goals.length} goal${_goals.length != 1 ? 's' : ''} selected'}'
-                    : 'Select your skill level to continue',
+                ? 'Almost there — ${_skill == null ? 'pick a skill level' : '${_goals.length} goal${_goals.length != 1 ? 's' : ''} selected'}'
+                : 'Select your skill level to continue',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: _completeness >= 4
                   ? const Color(0xFF4CAF50)
                   : _completeness >= 2
-                      ? AppColors.amber
-                      : AppColors.muted,
+                  ? AppColors.amber
+                  : AppColors.muted,
               fontSize: 13,
               fontWeight: FontWeight.w600,
             ),
@@ -336,22 +377,24 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
             label: _completeness >= 4
                 ? "Let's Cook! 🔥"
                 : _completeness >= 1
-                    ? "Let's Cook! 🍳"
-                    : 'Select skill level',
+                ? "Let's Cook! 🍳"
+                : 'Select skill level',
             enabled: _skill != null && !_saving,
             loading: _saving,
             gradient: _completeness >= 4
                 ? const [Color(0xFF4CAF50), Color(0xFF66BB6A)]
                 : _completeness >= 3
-                    ? const [AppColors.amber, Color(0xFFFFC107)]
-                    : _completeness >= 1
-                        ? const [AppColors.coral, AppColors.amber]
-                        : null,
+                ? const [AppColors.amber, Color(0xFFFFC107)]
+                : _completeness >= 1
+                ? const [AppColors.coral, AppColors.amber]
+                : null,
             glow: _completeness >= 4,
             onTap: () async {
               if (_saving) return;
               if (await _persist() && mounted) {
-                flow.setScreen(AppScreen.gamificationTutorial);
+                if (!OnboardingEditMode.exit(flow, saved: true)) {
+                  flow.setScreen(AppScreen.gamificationTutorial);
+                }
               }
             },
           ),
@@ -359,7 +402,11 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
           Text(
             'Your deck is being personalized...',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.muted, fontSize: 12, fontFamily: 'Inter'),
+            style: TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              fontFamily: 'Inter',
+            ),
           ),
         ],
       ),
@@ -445,14 +492,14 @@ class _OnboardingSkillScreenState extends State<OnboardingSkillScreen> {
     final gColor = !sel
         ? null
         : gTotal >= 4
-            ? const Color(0xFF4CAF50)
-            : gIdx == 0
-                ? AppColors.coral
-                : gIdx == 1
-                    ? AppColors.amber
-                    : gIdx == 2
-                        ? const Color(0xFFFFD700)
-                        : const Color(0xFF4CAF50);
+        ? const Color(0xFF4CAF50)
+        : gIdx == 0
+        ? AppColors.coral
+        : gIdx == 1
+        ? AppColors.amber
+        : gIdx == 2
+        ? const Color(0xFFFFD700)
+        : const Color(0xFF4CAF50);
     return SlideUp(
       duration: Duration(milliseconds: 300 + gi * 60),
       child: GestureDetector(
@@ -539,8 +586,9 @@ class _SliderRow extends StatelessWidget {
                     topLeft: Radius.circular(i == 0 ? 12 : 0),
                     bottomLeft: Radius.circular(i == 0 ? 12 : 0),
                     topRight: Radius.circular(i == levels.length - 1 ? 12 : 0),
-                    bottomRight:
-                        Radius.circular(i == levels.length - 1 ? 12 : 0),
+                    bottomRight: Radius.circular(
+                      i == levels.length - 1 ? 12 : 0,
+                    ),
                   ),
                   border: Border(
                     bottom: BorderSide(

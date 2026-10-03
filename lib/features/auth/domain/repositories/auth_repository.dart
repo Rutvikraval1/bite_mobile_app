@@ -22,6 +22,9 @@ abstract interface class AuthRepository {
 
   Future<AuthResult> updatePassword(String newPassword);
 
+  /// Starts an email change; Supabase emails a confirmation link.
+  Future<AuthResult> updateEmail(String newEmail);
+
   Future<AuthResult> deleteAccount();
 
   Future<AuthResult> signOut();

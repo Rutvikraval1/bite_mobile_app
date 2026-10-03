@@ -7,6 +7,9 @@ abstract final class TableNames {
   static const String savedItems = 'saved_items';
   static const String mealPlans = 'meal_plans';
   static const String swipes = 'swipes';
+  static const String cookHistory = 'cook_history';
+  static const String deviceTokens = 'device_tokens';
+  static const String follows = 'follows';
   static const String feedPosts = 'feed_posts';
   static const String postComments = 'post_comments';
   static const String postReactions = 'post_reactions';

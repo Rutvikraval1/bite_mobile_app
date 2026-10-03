@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -7,6 +10,8 @@ import 'core/router/app_screen.dart';
 import 'core/router/flow_cubit.dart';
 import 'core/router/flow_state.dart';
 import 'core/services/first_launch_service.dart';
+import 'core/services/push_service.dart';
+import 'core/state/app_state.dart';
 import 'core/state/app_state_cubit.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
@@ -44,6 +49,10 @@ import 'features/genie/presentation/screens/genie_scan_screen.dart';
 import 'features/genie/presentation/screens/genie_screen.dart';
 import 'features/genie/presentation/screens/meal_builder_screen.dart';
 import 'features/home/presentation/screens/swipe_deck_screen.dart';
+import 'features/notifications/data/notification_repository.dart';
+import 'features/notifications/presentation/blocs/notifications_cubit.dart';
+import 'features/social/data/follow_repository.dart';
+import 'features/social/presentation/blocs/follow_cubit.dart';
 import 'features/profile/presentation/screens/community_impact_screen.dart';
 import 'features/profile/presentation/screens/competition_screen.dart';
 import 'features/profile/presentation/screens/creator_create_screen.dart';
@@ -120,12 +129,14 @@ class BiteShell extends StatefulWidget {
 class _BiteShellState extends State<BiteShell> {
   late final AuthRepositoryImpl _authRepository;
   late final ContentRepositoryImpl _contentRepository;
+  late final NotificationRepository _notificationRepository;
 
   @override
   void initState() {
     super.initState();
     _authRepository = AuthRepositoryImpl();
     _contentRepository = ContentRepositoryImpl();
+    _notificationRepository = NotificationRepository();
   }
 
   @override
@@ -137,6 +148,15 @@ class _BiteShellState extends State<BiteShell> {
           create: (_) => ContentCubit(_contentRepository),
         ),
         BlocProvider<AppStateCubit>(create: (_) => AppStateCubit()),
+        RepositoryProvider<NotificationRepository>.value(
+          value: _notificationRepository,
+        ),
+        BlocProvider<NotificationsCubit>(
+          create: (_) => NotificationsCubit(_notificationRepository),
+        ),
+        BlocProvider<FollowCubit>(
+          create: (_) => FollowCubit(FollowRepository()),
+        ),
         // First launch opens on the welcome gate; later launches on splash.
         BlocProvider<FlowCubit>(
           create: (_) => FlowCubit(
@@ -163,13 +183,36 @@ class _FlowHost extends StatefulWidget {
 class _FlowHostState extends State<_FlowHost> {
   bool _wasAuthenticated = false;
 
+  /// Last gamification snapshot written to `profiles`.
+  Map<String, dynamic>? _lastSynced;
+  Timer? _syncTimer;
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    super.dispose();
+  }
+
   void _onAuthChanged(BuildContext context, AuthState state) {
     final flow = context.read<FlowCubit>();
-    context.read<ContentCubit>().bind(state.user?.id);
+    final userId = state.user?.id;
+    context.read<ContentCubit>().bind(userId);
+    context.read<NotificationsCubit>().bind(userId);
+    context.read<FollowCubit>().bind(userId);
     if (state.authenticated && !state.loading) {
       final profile = state.profile;
-      if (profile != null) {
-        context.read<AppStateCubit>().hydrateFromProfile(profile);
+      final appState = context.read<AppStateCubit>();
+      if (profile != null && !appState.state.hydrated) {
+        appState.hydrateFromProfile(profile);
+        _lastSynced = _normalize(appState.persistedFields);
+      }
+      if (userId != null) {
+        PushService.instance.attach(
+          userId: userId,
+          repository: context.read<NotificationRepository>(),
+          onOpen: _openFromPush,
+          onForegroundMessage: context.read<NotificationsCubit>().refresh,
+        );
       }
       final wasAuthed = _wasAuthenticated;
       _wasAuthenticated = true;
@@ -182,10 +225,52 @@ class _FlowHostState extends State<_FlowHost> {
       final wasAuthed = _wasAuthenticated;
       _wasAuthenticated = false;
       if (wasAuthed) {
+        _syncTimer?.cancel();
+        _lastSynced = null;
+        PushService.instance.detach();
         context.read<AppStateCubit>().resetToGuest();
         flow.resetTo(AppScreen.auth);
       }
     }
+  }
+
+  /// Persist XP / coins / streak / badges shortly after they change so
+  /// progress survives restarts and shows on every screen.
+  void _onAppStateChanged(BuildContext context, AppState state) {
+    final auth = context.read<AuthCubit>();
+    if (!state.hydrated || !auth.state.authenticated) return;
+    final fields = context.read<AppStateCubit>().persistedFields;
+    if (_lastSynced != null && mapEquals(_lastSynced, _normalize(fields))) {
+      return;
+    }
+    _syncTimer?.cancel();
+    _syncTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted) return;
+      final latest = context.read<AppStateCubit>().persistedFields;
+      _lastSynced = _normalize(latest);
+      auth.saveFields(latest);
+    });
+  }
+
+  /// Lists compare by identity in [mapEquals]; join them for comparison.
+  static Map<String, dynamic> _normalize(Map<String, dynamic> m) => {
+        for (final e in m.entries)
+          e.key: e.value is List ? (e.value as List).join('|') : e.value,
+      };
+
+  /// Push tapped → open its destination (recipe id when present).
+  void _openFromPush(String? actionDest, Map<String, dynamic> data) {
+    if (!mounted) return;
+    final recipeId = (data['recipe_id'] as num?)?.toInt();
+    if (recipeId != null) {
+      final card = context.read<ContentCubit>().state.findCard(recipeId);
+      if (card != null) {
+        context.read<AppStateCubit>().viewRecipe(card);
+        context.read<FlowCubit>().setScreen(AppScreen.recipeDetail);
+        return;
+      }
+    }
+    context.read<FlowCubit>().setScreen(AppScreen.notifications);
   }
 
   /// Leaving onboarding for the main app (tutorial finished or "skip all")
@@ -200,6 +285,13 @@ class _FlowHostState extends State<_FlowHost> {
     return MultiBlocListener(
       listeners: [
         BlocListener<AuthCubit, AuthState>(listener: _onAuthChanged),
+        BlocListener<AppStateCubit, AppState>(listener: _onAppStateChanged),
+        BlocListener<NotificationsCubit, NotificationsState>(
+          listenWhen: (a, b) => a.unreadCount != b.unreadCount,
+          listener: (context, s) => context
+              .read<AppStateCubit>()
+              .setNotificationCount(s.unreadCount),
+        ),
         BlocListener<FlowCubit, FlowState>(
           listenWhen: (prev, curr) =>
               prev.screen.isAuthOrOnboarding && !curr.screen.isAuthOrOnboarding,

@@ -21,6 +21,15 @@ abstract final class ContentMapper {
         cuisine: (r['cuisine'] as String?) ?? '',
         gradient: (r['gradient'] as String?) ?? '',
         tags: ((r['tags'] as List?) ?? const []).whereType<String>().toList(),
+        authorId: r['author_id'] as String?,
+        description: (r['description'] as String?) ?? '',
+        ingredients:
+            ((r['ingredients'] as List?) ?? const []).whereType<String>().toList(),
+        steps: ((r['steps'] as List?) ?? const []).whereType<String>().toList(),
+        publishStatus: (r['status'] as String?) ?? 'published',
+        createdAt: r['created_at'] != null
+            ? DateTime.tryParse(r['created_at'].toString())
+            : null,
       );
 
   static BiteCard drinkFromRow(Map<String, dynamic> d) => BiteCard(

@@ -46,13 +46,15 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     final activeCardIndex = context.select<AppStateCubit, int>(
       (c) => c.state.activeCardIndex,
     );
+    final selected = context.select<AppStateCubit, BiteCard?>(
+      (c) => c.state.selectedRecipe,
+    );
     final content = context.watch<ContentCubit>().state;
     final deck = subTab == DeckTab.drinks
         ? content.drinks
         : content.recipes;
-    final card = deck.isEmpty
-        ? null
-        : deck[activeCardIndex % deck.length];
+    final card = selected ??
+        (deck.isEmpty ? null : deck[activeCardIndex % deck.length]);
 
     if (card == null) {
       return ColoredBox(
@@ -73,19 +75,27 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       );
     }
 
-    final isDrink = subTab == DeckTab.drinks;
+    final isDrink = selected == null && subTab == DeckTab.drinks;
     final themeColor = isDrink ? AppColors.drinksBlue : AppColors.coral;
-    final baseServings = isDrink
-        ? CookData.baseServingsDrink
-        : CookData.baseServingsFood;
+    // User-created recipes carry their own ingredients/steps.
+    final hasOwn = card.ingredients.isNotEmpty || card.steps.isNotEmpty;
+    final baseServings = hasOwn && card.serves > 0
+        ? card.serves
+        : isDrink
+            ? CookData.baseServingsDrink
+            : CookData.baseServingsFood;
     _servings ??= baseServings;
     final servings = _servings!;
-    final ingredients = isDrink
-        ? CookData.drinkIngredients
-        : CookData.foodIngredients;
-    final steps = isDrink
-        ? CookData.drinkDetailSteps
-        : CookData.foodDetailSteps;
+    final ingredients = card.ingredients.isNotEmpty
+        ? card.ingredients.map(_parseIngredient).toList()
+        : isDrink
+            ? CookData.drinkIngredients
+            : CookData.foodIngredients;
+    final steps = card.steps.isNotEmpty
+        ? [for (final s in card.steps) CookStepDef(s)]
+        : isDrink
+            ? CookData.drinkDetailSteps
+            : CookData.foodDetailSteps;
 
     return Material(
       color: Colors.black.withValues(alpha: 0.6),
@@ -594,6 +604,32 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         ],
       ),
     );
+  }
+
+  /// "2 cups rice" → qty 2, unit "cups", name "rice". Falls back to the
+  /// whole line as the name when there's no leading quantity.
+  static CookIngredient _parseIngredient(String line) {
+    final m = RegExp(r'^\s*(\d+(?:[.,]\d+)?|\d+/\d+)\s*([a-zA-Z]+\.?)?\s+(.+)$')
+        .firstMatch(line);
+    if (m == null) return CookIngredient(0, '', line.trim());
+    final raw = m.group(1)!.replaceAll(',', '.');
+    final double qty;
+    if (raw.contains('/')) {
+      final parts = raw.split('/');
+      final d = double.parse(parts[1]);
+      qty = d == 0 ? 0 : double.parse(parts[0]) / d;
+    } else {
+      qty = double.parse(raw);
+    }
+    const units = {
+      'g', 'kg', 'ml', 'l', 'oz', 'lb', 'lbs', 'cup', 'cups', 'tsp', 'tbsp',
+      'pinch', 'clove', 'cloves', 'slice', 'slices', 'can', 'cans',
+    };
+    final unit = m.group(2);
+    if (unit != null && units.contains(unit.toLowerCase().replaceAll('.', ''))) {
+      return CookIngredient(qty, unit, m.group(3)!.trim());
+    }
+    return CookIngredient(qty, '', '${unit ?? ''} ${m.group(3)!}'.trim());
   }
 
   // ── Ingredients tab ──
@@ -1235,7 +1271,10 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       ..dishTitle = card.title
       ..creator = card.creator
       ..isDrink = isDrink
-      ..heat = card.heat;
+      ..heat = card.heat
+      ..recipeId = isDrink ? null : card.id
+      ..emoji = card.emoji
+      ..imageUrl = card.image;
     context.read<FlowCubit>().setScreen(AppScreen.cookMode);
   }
 

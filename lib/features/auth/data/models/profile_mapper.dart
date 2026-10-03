@@ -7,6 +7,7 @@ abstract final class ProfileMapper {
         if (profile.username.isNotEmpty) 'username': profile.username,
         if (profile.bio.isNotEmpty) 'bio': profile.bio,
         if (profile.avatarEmoji.isNotEmpty) 'avatar_emoji': profile.avatarEmoji,
+        'avatar_url': profile.avatarUrl,
         if (profile.dob != null)
           'dob': profile.dob!.toIso8601String().split('T').first,
         'xp': profile.xp,
@@ -34,6 +35,7 @@ abstract final class ProfileMapper {
       username: (map['username'] as String?) ?? '',
       bio: (map['bio'] as String?) ?? '',
       avatarEmoji: (map['avatar_emoji'] as String?) ?? '🧑‍🍳',
+      avatarUrl: _nonEmpty(map['avatar_url']),
       dob: map['dob'] != null ? DateTime.tryParse(map['dob'].toString()) : null,
       xp: (map['xp'] as num?)?.toInt() ?? 0,
       biteCoins: (map['bite_coins'] as num?)?.toInt() ?? 0,
@@ -51,6 +53,9 @@ abstract final class ProfileMapper {
       locationGranted: (map['location_granted'] as bool?) ?? false,
       cookingSkill: map['cooking_skill'] as String?,
       cookingGoal: map['cooking_goal'] as String?,
+      cookedCount: (map['cooked_count'] as num?)?.toInt() ?? 0,
+      pushEnabled: (map['push_enabled'] as bool?) ?? true,
+      mealRemindersEnabled: (map['meal_reminders_enabled'] as bool?) ?? true,
       createdAt: map['created_at'] != null
           ? DateTime.tryParse(map['created_at'].toString())
           : null,
@@ -62,6 +67,9 @@ abstract final class ProfileMapper {
 
   /// Eagerly filters to strings so a null/odd array element can't throw
   /// later (a lazy `.cast<String>()` fails on first read, outside any try).
+  static String? _nonEmpty(Object? value) =>
+      value is String && value.isNotEmpty ? value : null;
+
   static List<String> _strings(Object? value) =>
       value is List ? value.whereType<String>().toList() : const [];
 

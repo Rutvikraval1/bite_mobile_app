@@ -1,4 +1,4 @@
-package com.bite.bite
+package com.bite.app
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -9,6 +9,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../blocs/auth_cubit.dart';
+import '../onboarding_edit_mode.dart';
 import '../widgets/auth_widgets.dart';
 import '../widgets/onboarding_scaffold.dart';
 
@@ -23,13 +24,32 @@ class OnboardingCuisineScreen extends StatefulWidget {
 
 class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
   static const _cuisines = [
-    'Korean', 'Italian', 'Mexican', 'Japanese', 'Thai', 'Indian',
-    'American', 'Chinese', 'Mediterranean', 'French', 'Vietnamese',
+    'Korean',
+    'Italian',
+    'Mexican',
+    'Japanese',
+    'Thai',
+    'Indian',
+    'American',
+    'Chinese',
+    'Mediterranean',
+    'French',
+    'Vietnamese',
     'Middle Eastern',
   ];
   static const _emojis = [
-    '🇰🇷', '🍝', '🌮', '🍱', '🥘', '🍛',
-    '🍔', '🥡', '🫒', '🥖', '🍜', '🧆',
+    '🇰🇷',
+    '🍝',
+    '🌮',
+    '🍱',
+    '🥘',
+    '🍛',
+    '🍔',
+    '🥡',
+    '🫒',
+    '🥖',
+    '🍜',
+    '🧆',
   ];
 
   late List<String> _selected;
@@ -49,16 +69,22 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
       if (isAdding) {
         _selected.add(c);
         if (_selected.length <= 3) {
-          XpFloatService.instance
-              .show(5, x: 15 + (c.hashCode.abs() % 70).toDouble(), y: 35);
+          XpFloatService.instance.show(
+            5,
+            x: 15 + (c.hashCode.abs() % 70).toDouble(),
+            y: 35,
+          );
           if (_selected.length == 3) _ptsCapped = true;
         }
       } else {
         final withinEarningRange = _selected.length <= 3;
         _selected.remove(c);
         if (withinEarningRange) {
-          XpFloatService.instance
-              .show(-5, x: 15 + (c.hashCode.abs() % 70).toDouble(), y: 35);
+          XpFloatService.instance.show(
+            -5,
+            x: 15 + (c.hashCode.abs() % 70).toDouble(),
+            y: 35,
+          );
           _ptsCapped = false;
         }
       }
@@ -87,8 +113,11 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
     });
     for (var i = 0; i < earnedCount; i++) {
       Future<void>.delayed(Duration(milliseconds: i * 150), () {
-        XpFloatService.instance
-            .show(-5, x: 20 + (i * 25) % 60, y: 30 + (i % 3) * 12);
+        XpFloatService.instance.show(
+          -5,
+          x: 20 + (i * 25) % 60,
+          y: 30 + (i % 3) * 12,
+        );
       });
     }
   }
@@ -129,8 +158,18 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
     if (n >= 5) return const [Color(0xFF66BB6A), Color(0xFF81C784)];
     if (n >= 4) return const [Color(0xFF8BC34A), Color(0xFFAED581)];
     if (n >= 3) return const [AppColors.amber, Color(0xFFFFC107)];
-    if (n >= 2) return [AppColors.coral.withValues(alpha: 0.5), AppColors.coral.withValues(alpha: 0.25)];
-    if (n >= 1) return [AppColors.coral.withValues(alpha: 0.33), AppColors.coral.withValues(alpha: 0.13)];
+    if (n >= 2) {
+      return [
+        AppColors.coral.withValues(alpha: 0.5),
+        AppColors.coral.withValues(alpha: 0.25),
+      ];
+    }
+    if (n >= 1) {
+      return [
+        AppColors.coral.withValues(alpha: 0.33),
+        AppColors.coral.withValues(alpha: 0.13),
+      ];
+    }
     return null;
   }
 
@@ -148,7 +187,9 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
   /// Returns false and shows a toast if the write failed.
   Future<bool> _persist() async {
     setState(() => _saving = true);
-    final result = await context.read<AuthCubit>().updateProfile({'cuisines': _selected});
+    final result = await context.read<AuthCubit>().updateProfile({
+      'cuisines': _selected,
+    });
     if (!mounted) return false;
     setState(() => _saving = false);
     if (!result.isSuccess) {
@@ -174,8 +215,16 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
       step: 1,
       title: 'What do you love to eat?',
       subtitle: "Pick 3 or more. We'll customize your deck.",
-      onSkip: () => setState(() => _showSkipAlert = true),
-      onBack: () => flow.setScreen(AppScreen.profileSetup),
+      onSkip: () {
+        if (!OnboardingEditMode.exit(flow)) {
+          setState(() => _showSkipAlert = true);
+        }
+      },
+      onBack: () {
+        if (!OnboardingEditMode.exit(flow)) {
+          flow.setScreen(AppScreen.profileSetup);
+        }
+      },
       overlay: _showSkipAlert
           ? OnboardingSkipDialog(
               title: 'Skip cuisine preferences?',
@@ -268,8 +317,11 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
                                   shape: BoxShape.circle,
                                   color: selColor,
                                 ),
-                                child: const Icon(Icons.check,
-                                    color: Colors.white, size: 12),
+                                child: const Icon(
+                                  Icons.check,
+                                  color: Colors.white,
+                                  size: 12,
+                                ),
                               ),
                             ),
                           ),
@@ -343,7 +395,9 @@ class _OnboardingCuisineScreenState extends State<OnboardingCuisineScreen> {
                 onTap: () async {
                   if (_saving) return;
                   if (await _persist() && mounted) {
-                    flow.setScreen(AppScreen.onboardingDietary);
+                    if (!OnboardingEditMode.exit(flow, saved: true)) {
+                      flow.setScreen(AppScreen.onboardingDietary);
+                    }
                   }
                 },
               ),
@@ -400,7 +454,11 @@ class _ThumbPill extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w700),
+          style: TextStyle(
+            color: color,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );

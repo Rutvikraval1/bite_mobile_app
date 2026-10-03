@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/state/app_state.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/loops.dart';
+import '../../../../core/widgets/avatar_img.dart';
 
 /// Tier ring colors — mirrors the prototype's avatar ring gradient.
 class _TierRing {
@@ -44,6 +45,7 @@ class SwipeDeckTopBar extends StatelessWidget {
     required this.xp,
     required this.notificationCount,
     this.avatarEmoji,
+    this.avatarUrl,
   });
 
   final DeckTab subTab;
@@ -60,6 +62,9 @@ class SwipeDeckTopBar extends StatelessWidget {
   final int xp;
   final int notificationCount;
   final String? avatarEmoji;
+
+  /// Uploaded profile photo; shown instead of [avatarEmoji] when set.
+  final String? avatarUrl;
 
   Color get _tabColor => switch (subTab) {
         DeckTab.food => AppColors.coral,
@@ -105,6 +110,7 @@ class SwipeDeckTopBar extends StatelessWidget {
                 _AvatarButton(
                   tier: _tier,
                   emoji: avatarEmoji ?? _tier.emoji,
+                  imageUrl: avatarUrl,
                   size: tiny ? 30 : 38,
                   onTap: onAvatarClick,
                 ),
@@ -188,10 +194,12 @@ class _AvatarButton extends StatelessWidget {
     required this.emoji,
     required this.size,
     required this.onTap,
+    this.imageUrl,
   });
 
   final _TierRing tier;
   final String emoji;
+  final String? imageUrl;
   final double size;
   final VoidCallback onTap;
 
@@ -234,10 +242,17 @@ class _AvatarButton extends StatelessWidget {
             ),
             border: Border.all(color: const Color(0xFF0D0D0D), width: 2),
           ),
-          child: Text(
-            emoji,
-            style: TextStyle(fontSize: size * 0.42),
-          ),
+          child: imageUrl != null
+              ? AvatarImg(
+                  emoji: emoji,
+                  imageUrl: imageUrl,
+                  size: size - 8,
+                  borderWidth: 0,
+                )
+              : Text(
+                  emoji,
+                  style: TextStyle(fontSize: size * 0.42),
+                ),
         ),
       ),
     );

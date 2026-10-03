@@ -56,6 +56,44 @@ abstract final class AppEnv {
         : (fromEnv ?? '');
   }
 
+  // ── Firebase (push notifications) ──
+  // Values from the Firebase console → Project settings → Your apps.
+  static const _fbApiKeyAndroid = String.fromEnvironment('FIREBASE_ANDROID_API_KEY');
+  static const _fbAppIdAndroid = String.fromEnvironment('FIREBASE_ANDROID_APP_ID');
+  static const _fbApiKeyIos = String.fromEnvironment('FIREBASE_IOS_API_KEY');
+  static const _fbAppIdIos = String.fromEnvironment('FIREBASE_IOS_APP_ID');
+  static const _fbIosBundleId = String.fromEnvironment('FIREBASE_IOS_BUNDLE_ID');
+  static const _fbProjectId = String.fromEnvironment('FIREBASE_PROJECT_ID');
+  static const _fbSenderId = String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID');
+  static const _fbStorageBucket = String.fromEnvironment('FIREBASE_STORAGE_BUCKET');
+
+  static String get firebaseAndroidApiKey =>
+      _pick(_fbApiKeyAndroid, 'FIREBASE_ANDROID_API_KEY');
+  static String get firebaseAndroidAppId =>
+      _pick(_fbAppIdAndroid, 'FIREBASE_ANDROID_APP_ID');
+  static String get firebaseIosApiKey =>
+      _pick(_fbApiKeyIos, 'FIREBASE_IOS_API_KEY');
+  static String get firebaseIosAppId => _pick(_fbAppIdIos, 'FIREBASE_IOS_APP_ID');
+  static String get firebaseIosBundleId =>
+      _pick(_fbIosBundleId, 'FIREBASE_IOS_BUNDLE_ID');
+  static String get firebaseProjectId =>
+      _pick(_fbProjectId, 'FIREBASE_PROJECT_ID');
+  static String get firebaseMessagingSenderId =>
+      _pick(_fbSenderId, 'FIREBASE_MESSAGING_SENDER_ID');
+  static String get firebaseStorageBucket =>
+      _pick(_fbStorageBucket, 'FIREBASE_STORAGE_BUCKET');
+
+  // ── Support / sharing ──
+  static const _supportEmail = String.fromEnvironment('SUPPORT_EMAIL');
+  static const _inviteUrl = String.fromEnvironment('INVITE_URL');
+
+  static String get supportEmail => _pick(_supportEmail, 'SUPPORT_EMAIL');
+  static String get inviteUrl => _pick(_inviteUrl, 'INVITE_URL');
+
+  /// Compile-time value wins; otherwise the runtime `.env` value.
+  static String _pick(String compile, String name) =>
+      compile.isNotEmpty ? compile : (_runtime(name) ?? '');
+
   /// Runtime lookup that tolerates a missing/failed `.env` load (dotenv
   /// throws NotInitializedError when read before a successful load).
   static String? _runtime(String name) =>

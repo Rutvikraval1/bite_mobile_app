@@ -490,6 +490,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                             xp: state.xp,
                             notificationCount: state.notificationCount,
                             avatarEmoji: auth.profile?.avatarEmoji,
+                            avatarUrl: auth.profile?.avatarUrl,
                           ),
                         ),
                       ),

@@ -12,6 +12,8 @@ import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/glass.dart';
+import '../../../auth/presentation/blocs/auth_cubit.dart';
+import '../../../content/presentation/blocs/content_cubit.dart';
 import '../../domain/cook_session.dart';
 
 /// Post-cook celebration / rate & share flow — ports `PostCookScreen` from
@@ -49,6 +51,7 @@ class _PostCookScreenState extends State<PostCookScreen> {
       BadgeService.instance.award(const ['spice_seeker']);
     }
     context.read<AppStateCubit>().addXp(25);
+    _logCook();
 
     _achievementShowTimer = Timer(const Duration(milliseconds: 1200), () {
       if (mounted) setState(() => _showAchievement = true);
@@ -56,6 +59,22 @@ class _PostCookScreenState extends State<PostCookScreen> {
     _achievementHideTimer = Timer(const Duration(milliseconds: 4500), () {
       if (mounted) setState(() => _showAchievement = false);
     });
+  }
+
+  /// Saves this cook to `cook_history` (Profile → Cooked + cooked count).
+  Future<void> _logCook() async {
+    final session = CookSession.instance;
+    final result = await context.read<ContentCubit>().logCook(
+          title: session.dishTitle,
+          emoji: session.emoji,
+          recipeId: session.recipeId,
+          imageUrl: session.imageUrl,
+        );
+    if (!result.isSuccess) {
+      debugPrint('[bite] logCook failed: ${result.error}');
+    } else if (mounted) {
+      context.read<AuthCubit>().refreshProfile();
+    }
   }
 
   @override

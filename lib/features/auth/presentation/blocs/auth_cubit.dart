@@ -97,6 +97,10 @@ class AuthCubit extends Cubit<AuthState> {
     return _repository.updatePassword(newPassword);
   }
 
+  Future<AuthResult> updateEmail(String newEmail) {
+    return _repository.updateEmail(newEmail);
+  }
+
   Future<AuthResult> deleteAccount() {
     return _repository.deleteAccount();
   }
@@ -131,6 +135,17 @@ class AuthCubit extends Cubit<AuthState> {
     return result.isSuccess
         ? const AuthResult()
         : AuthResult.failure(result.error ?? 'Could not update profile');
+  }
+
+  /// Writes [updates] to the profile without refetching — used for
+  /// frequent background syncs (XP, coins, streaks, badges).
+  Future<void> saveFields(Map<String, dynamic> updates) async {
+    final userId = state.user?.id;
+    if (userId == null || updates.isEmpty) return;
+    final result = await _repository.updateProfile(userId, updates);
+    if (!result.isSuccess) {
+      debugPrint('[bite] saveFields failed: ${result.error}');
+    }
   }
 
   /// Local-only profile refresh used after XP/reward flows update a table.

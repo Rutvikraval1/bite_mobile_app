@@ -38,6 +38,12 @@ class BiteCard {
     this.distance,
     this.photos = const [],
     this.menuHighlights = const [],
+    this.authorId,
+    this.description = '',
+    this.ingredients = const [],
+    this.steps = const [],
+    this.publishStatus = 'published',
+    this.createdAt,
   });
 
   final int id;
@@ -72,5 +78,17 @@ class BiteCard {
   final List<String> photos;
   final List<MenuHighlight> menuHighlights;
 
+  // ── User-created recipe fields ──
+  /// Profile id of the creator; null for catalog recipes.
+  final String? authorId;
+  final String description;
+  final List<String> ingredients;
+  final List<String> steps;
+
+  /// `draft` or `published`.
+  final String publishStatus;
+  final DateTime? createdAt;
+
   bool get isPlace => address != null;
+  bool get isDraft => publishStatus == 'draft';
 }

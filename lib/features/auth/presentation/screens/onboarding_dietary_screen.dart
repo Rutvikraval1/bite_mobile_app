@@ -9,6 +9,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/glass.dart';
 import '../blocs/auth_cubit.dart';
+import '../onboarding_edit_mode.dart';
 import '../widgets/auth_widgets.dart';
 import '../widgets/onboarding_scaffold.dart';
 
@@ -27,24 +28,36 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
       label: 'DIET',
       color: AppColors.coral,
       items: [
-        'Vegetarian 🥬', 'Vegan 🌱', 'Pescatarian 🐟', 'Keto 🥑',
-        'Paleo', 'Halal', 'Kosher',
+        'Vegetarian 🥬',
+        'Vegan 🌱',
+        'Pescatarian 🐟',
+        'Keto 🥑',
+        'Paleo',
+        'Halal',
+        'Kosher',
       ],
     ),
     _Section(
       label: 'ALLERGIES',
       color: AppColors.amber,
       items: [
-        'Gluten-Free', 'Dairy-Free 🥛', 'Nut-Free 🥜',
-        'Shellfish-Free 🦐', 'Egg-Free 🥚', 'Soy-Free',
+        'Gluten-Free',
+        'Dairy-Free 🥛',
+        'Nut-Free 🥜',
+        'Shellfish-Free 🦐',
+        'Egg-Free 🥚',
+        'Soy-Free',
       ],
     ),
     _Section(
       label: 'PREFERENCES',
       color: AppColors.cyan,
       items: [
-        'Low Sodium', 'Low Sugar', 'High Protein 💪',
-        'Low Calorie', 'Organic',
+        'Low Sodium',
+        'Low Sugar',
+        'High Protein 💪',
+        'Low Calorie',
+        'Organic',
       ],
     ),
   ];
@@ -72,16 +85,22 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
         final newCount = _selected.where(sec.items.contains).length;
         if (newCount <= 2) {
           _sectionPtsCounts[secKey] = newCount;
-          XpFloatService.instance
-              .show(5, x: 15 + (item.hashCode.abs() % 70).toDouble(), y: 35);
+          XpFloatService.instance.show(
+            5,
+            x: 15 + (item.hashCode.abs() % 70).toDouble(),
+            y: 35,
+          );
         }
       } else {
         _selected.remove(item);
         final newCount = _selected.where(sec.items.contains).length;
         if (selectedInSection <= 2 && newCount < selectedInSection) {
           _sectionPtsCounts[secKey] = newCount;
-          XpFloatService.instance
-              .show(-5, x: 15 + (item.hashCode.abs() % 70).toDouble(), y: 35);
+          XpFloatService.instance.show(
+            -5,
+            x: 15 + (item.hashCode.abs() % 70).toDouble(),
+            y: 35,
+          );
         }
       }
     });
@@ -101,8 +120,11 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
       Future<void>.delayed(
         Duration(milliseconds: i * 150 + sectionIdx * 250),
         () {
-          XpFloatService.instance
-              .show(5, x: 15 + (i * 23) % 60, y: 22 + sectionIdx * 20);
+          XpFloatService.instance.show(
+            5,
+            x: 15 + (i * 23) % 60,
+            y: 22 + sectionIdx * 20,
+          );
         },
       );
     }
@@ -116,8 +138,11 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
     });
     for (var i = 0; i < earned; i++) {
       Future<void>.delayed(Duration(milliseconds: i * 120), () {
-        XpFloatService.instance
-            .show(-5, x: 20 + (i * 30) % 60, y: 22 + sectionIdx * 20);
+        XpFloatService.instance.show(
+          -5,
+          x: 20 + (i * 30) % 60,
+          y: 22 + sectionIdx * 20,
+        );
       });
     }
   }
@@ -139,8 +164,11 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
     });
     for (var i = 0; i < totalEarned; i++) {
       Future<void>.delayed(Duration(milliseconds: i * 120), () {
-        XpFloatService.instance
-            .show(-5, x: 10 + (i * 12) % 80, y: 20 + (i % 3) * 18);
+        XpFloatService.instance.show(
+          -5,
+          x: 10 + (i * 12) % 80,
+          y: 20 + (i % 3) * 18,
+        );
       });
     }
   }
@@ -151,7 +179,9 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
   /// Returns false and shows a toast if the write failed.
   Future<bool> _persist() async {
     setState(() => _saving = true);
-    final result = await context.read<AuthCubit>().updateProfile({'dietary': _selected});
+    final result = await context.read<AuthCubit>().updateProfile({
+      'dietary': _selected,
+    });
     if (!mounted) return false;
     setState(() => _saving = false);
     if (!result.isSuccess) {
@@ -169,8 +199,16 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
       step: 2,
       title: 'Any dietary needs?',
       subtitle: "We'll filter out what doesn't fit. Select all that apply.",
-      onSkip: () => setState(() => _showSkipAlert = true),
-      onBack: () => flow.setScreen(AppScreen.onboardingCuisine),
+      onSkip: () {
+        if (!OnboardingEditMode.exit(flow)) {
+          setState(() => _showSkipAlert = true);
+        }
+      },
+      onBack: () {
+        if (!OnboardingEditMode.exit(flow)) {
+          flow.setScreen(AppScreen.onboardingCuisine);
+        }
+      },
       overlay: _showSkipAlert
           ? OnboardingSkipDialog(
               title: 'Skip dietary settings?',
@@ -196,8 +234,11 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                const Icon(Icons.info_outline,
-                    color: AppColors.muted, size: 16),
+                const Icon(
+                  Icons.info_outline,
+                  color: AppColors.muted,
+                  size: 16,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -263,17 +304,17 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
             n == 0
                 ? 'Select any dietary needs or preferences'
                 : n >= 3
-                    ? '💯 $n+ — dietary perfection!'
-                    : n >= 2
-                        ? '✨ $n set — we\'ll filter out what doesn\'t fit!'
-                        : '👍 1 set — add any others that apply',
+                ? '💯 $n+ — dietary perfection!'
+                : n >= 2
+                ? '✨ $n set — we\'ll filter out what doesn\'t fit!'
+                : '👍 1 set — add any others that apply',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: n >= 3
                   ? const Color(0xFF4CAF50)
                   : n >= 1
-                      ? AppColors.amber
-                      : AppColors.muted,
+                  ? AppColors.amber
+                  : AppColors.muted,
               fontSize: 13,
               fontWeight: FontWeight.w600,
             ),
@@ -283,22 +324,27 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
             label: n >= 3
                 ? 'Continue · $n set ✓'
                 : n > 0
-                    ? 'Continue ($n selected)'
-                    : 'Continue — none apply',
+                ? 'Continue ($n selected)'
+                : 'Continue — none apply',
             enabled: !_saving,
             loading: _saving,
             gradient: n >= 3
                 ? const [Color(0xFF4CAF50), Color(0xFF66BB6A)]
                 : n >= 2
-                    ? const [AppColors.amber, Color(0xFFFFC107)]
-                    : n >= 1
-                        ? [AppColors.coral.withValues(alpha: 0.53), AppColors.coral.withValues(alpha: 0.33)]
-                        : null,
+                ? const [AppColors.amber, Color(0xFFFFC107)]
+                : n >= 1
+                ? [
+                    AppColors.coral.withValues(alpha: 0.53),
+                    AppColors.coral.withValues(alpha: 0.33),
+                  ]
+                : null,
             glow: n >= 2,
             onTap: () async {
               if (_saving) return;
               if (await _persist() && mounted) {
-                flow.setScreen(AppScreen.onboardingSkill);
+                if (!OnboardingEditMode.exit(flow, saved: true)) {
+                  flow.setScreen(AppScreen.onboardingSkill);
+                }
               }
             },
           ),
@@ -336,7 +382,10 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
                   fontWeight: FontWeight.w700,
                   letterSpacing: 1,
                   shadows: [
-                    Shadow(color: sec.color.withValues(alpha: 0.27), blurRadius: 12),
+                    Shadow(
+                      color: sec.color.withValues(alpha: 0.27),
+                      blurRadius: 12,
+                    ),
                   ],
                 ),
               ),
@@ -394,18 +443,16 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
     final itemColor = !sel
         ? null
         : total >= 4
-            ? const Color(0xFF4CAF50)
-            : selIdx == 0
-                ? AppColors.coral
-                : selIdx == 1
-                    ? AppColors.amber
-                    : selIdx == 2
-                        ? const Color(0xFFFFD700)
-                        : const Color(0xFF4CAF50);
+        ? const Color(0xFF4CAF50)
+        : selIdx == 0
+        ? AppColors.coral
+        : selIdx == 1
+        ? AppColors.amber
+        : selIdx == 2
+        ? const Color(0xFFFFD700)
+        : const Color(0xFF4CAF50);
     return SlideUp(
-      duration: Duration(
-        milliseconds: 350 + ii * 60,
-      ),
+      duration: Duration(milliseconds: 350 + ii * 60),
       child: GestureDetector(
         onTap: () => _toggle(item),
         child: AnimatedContainer(
@@ -414,9 +461,7 @@ class _OnboardingDietaryScreenState extends State<OnboardingDietaryScreen> {
           decoration: BoxDecoration(
             color: sel ? itemColor : AppColors.glass,
             borderRadius: BorderRadius.circular(100),
-            border: Border.all(
-              color: sel ? itemColor! : Colors.transparent,
-            ),
+            border: Border.all(color: sel ? itemColor! : Colors.transparent),
             boxShadow: sel
                 ? [
                     BoxShadow(
@@ -522,7 +567,11 @@ class _ThumbPill extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w700),
+          style: TextStyle(
+            color: color,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );

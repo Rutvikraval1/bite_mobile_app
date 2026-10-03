@@ -6,6 +6,7 @@ class Profile {
     this.username = '',
     this.bio = '',
     this.avatarEmoji = '🧑‍🍳',
+    this.avatarUrl,
     this.dob,
     this.xp = 0,
     this.biteCoins = 0,
@@ -23,6 +24,9 @@ class Profile {
     this.locationGranted = false,
     this.cookingSkill,
     this.cookingGoal,
+    this.cookedCount = 0,
+    this.pushEnabled = true,
+    this.mealRemindersEnabled = true,
     this.createdAt,
     this.updatedAt,
   });
@@ -32,6 +36,10 @@ class Profile {
   final String username;
   final String bio;
   final String avatarEmoji;
+
+  /// Uploaded profile photo (Supabase Storage `avatars` bucket). Takes
+  /// precedence over [avatarEmoji] wherever the avatar is shown.
+  final String? avatarUrl;
   final DateTime? dob;
   final int xp;
   final int biteCoins;
@@ -49,6 +57,11 @@ class Profile {
   final bool locationGranted;
   final String? cookingSkill;
   final String? cookingGoal;
+
+  /// Number of rows in `cook_history` (kept in sync by a DB trigger).
+  final int cookedCount;
+  final bool pushEnabled;
+  final bool mealRemindersEnabled;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -66,6 +79,8 @@ class Profile {
     String? username,
     String? bio,
     String? avatarEmoji,
+    String? avatarUrl,
+    bool clearAvatarUrl = false,
     DateTime? dob,
     int? xp,
     int? biteCoins,
@@ -83,6 +98,9 @@ class Profile {
     bool? locationGranted,
     String? cookingSkill,
     String? cookingGoal,
+    int? cookedCount,
+    bool? pushEnabled,
+    bool? mealRemindersEnabled,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -92,6 +110,7 @@ class Profile {
       username: username ?? this.username,
       bio: bio ?? this.bio,
       avatarEmoji: avatarEmoji ?? this.avatarEmoji,
+      avatarUrl: clearAvatarUrl ? null : avatarUrl ?? this.avatarUrl,
       dob: dob ?? this.dob,
       xp: xp ?? this.xp,
       biteCoins: biteCoins ?? this.biteCoins,
@@ -109,6 +128,9 @@ class Profile {
       locationGranted: locationGranted ?? this.locationGranted,
       cookingSkill: cookingSkill ?? this.cookingSkill,
       cookingGoal: cookingGoal ?? this.cookingGoal,
+      cookedCount: cookedCount ?? this.cookedCount,
+      pushEnabled: pushEnabled ?? this.pushEnabled,
+      mealRemindersEnabled: mealRemindersEnabled ?? this.mealRemindersEnabled,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );

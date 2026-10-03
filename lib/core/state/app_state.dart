@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../../features/content/domain/entities/bite_card.dart';
 import '../../features/content/domain/entities/meal_plan.dart';
 
 /// Bottom-nav tabs — mirrors the JS `activeTab`.
@@ -83,12 +84,12 @@ class AppState {
     this.subTab = DeckTab.food,
     this.ageVerified = false,
     this.locationGranted = false,
-    this.xp = 140,
-    this.biteCoins = 156,
-    this.streakCount = 12,
-    this.longestStreak = 23,
-    this.streakMultiplier = 1.5,
-    this.streakFreezes = 1,
+    this.xp = 0,
+    this.biteCoins = 0,
+    this.streakCount = 0,
+    this.longestStreak = 0,
+    this.streakMultiplier = 1.0,
+    this.streakFreezes = 0,
     this.dailyChestClaimed = false,
     this.showDailyChest = false,
     this.showChestRewards,
@@ -102,9 +103,10 @@ class AppState {
     this.isPremium = false,
     this.userTier = 'free',
     this.userCuisines = const [],
-    this.notificationCount = 3,
+    this.notificationCount = 0,
     this.trendingMode = false,
     this.activeCardIndex = 0,
+    this.selectedRecipe,
     this.hydrated = false,
   });
 
@@ -136,6 +138,10 @@ class AppState {
   final int notificationCount;
   final bool trendingMode;
   final int activeCardIndex;
+
+  /// A specific recipe opened from outside the deck (profile, saved,
+  /// notifications). Recipe Detail shows this instead of the deck card.
+  final BiteCard? selectedRecipe;
 
   /// True once gamification state has been hydrated from the profile.
   final bool hydrated;
@@ -171,6 +177,8 @@ class AppState {
     int? notificationCount,
     bool? trendingMode,
     int? activeCardIndex,
+    BiteCard? selectedRecipe,
+    bool clearSelectedRecipe = false,
     bool? hydrated,
   }) {
     return AppState(
@@ -204,6 +212,9 @@ class AppState {
       notificationCount: notificationCount ?? this.notificationCount,
       trendingMode: trendingMode ?? this.trendingMode,
       activeCardIndex: activeCardIndex ?? this.activeCardIndex,
+      selectedRecipe: clearSelectedRecipe
+          ? null
+          : selectedRecipe ?? this.selectedRecipe,
       hydrated: hydrated ?? this.hydrated,
     );
   }

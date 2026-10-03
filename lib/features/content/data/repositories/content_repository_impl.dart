@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/constants/table_names.dart';
 import '../../../../core/network/supabase_client_provider.dart';
 import '../../domain/entities/bite_card.dart';
+import '../../domain/entities/cook_entry.dart';
+import '../../domain/entities/recipe_draft.dart';
 import '../../domain/entities/meal_plan.dart';
 import '../../domain/entities/saved_item.dart';
 import '../../domain/repositories/content_repository.dart';
@@ -41,9 +43,14 @@ class ContentRepositoryImpl implements ContentRepository {
       final places = _rows(pRes);
 
       return ContentCatalog(
+        // RLS also returns the caller's own drafts; the deck shows only
+        // published recipes.
         recipes: recipes.isEmpty
             ? seeds.recipes
-            : recipes.map(ContentMapper.recipeFromRow).toList(),
+            : recipes
+                .map(ContentMapper.recipeFromRow)
+                .where((r) => !r.isDraft)
+                .toList(),
         drinks: drinks.isEmpty
             ? seeds.drinks
             : drinks.map(ContentMapper.drinkFromRow).toList(),
@@ -74,12 +81,87 @@ class ContentRepositoryImpl implements ContentRepository {
           .select()
           .eq('user_id', userId)
           .order('created_at', ascending: false);
-      final rows = _rows(res);
-      if (rows.isEmpty) return SeedData.savedItems;
-      return rows.map(ContentMapper.savedFromRow).toList();
+      return _rows(res).map(ContentMapper.savedFromRow).toList();
     } catch (e) {
-      debugPrint('[content] Saved items fallback to seed: $e');
-      return SeedData.savedItems;
+      debugPrint('[content] fetchSavedItems failed: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<List<BiteCard>> fetchMyRecipes(String userId) async {
+    final res = await _client
+        .from(TableNames.recipes)
+        .select()
+        .eq('author_id', userId)
+        .order('created_at', ascending: false);
+    return _rows(res).map(ContentMapper.recipeFromRow).toList();
+  }
+
+  @override
+  Future<ContentWriteResult<BiteCard>> createRecipe(
+    String userId,
+    String creator,
+    RecipeDraft draft,
+  ) async {
+    try {
+      final row = await _client
+          .from(TableNames.recipes)
+          .insert(draft.toRow(authorId: userId, creator: creator))
+          .select()
+          .single();
+      return ContentWriteResult.ok(ContentMapper.recipeFromRow(row));
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
+    }
+  }
+
+  @override
+  Future<ContentWriteResult> deleteRecipe(String userId, int recipeId) async {
+    try {
+      await _client
+          .from(TableNames.recipes)
+          .delete()
+          .eq('author_id', userId)
+          .eq('id', recipeId);
+      return const ContentWriteResult.ok();
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
+    }
+  }
+
+  @override
+  Future<List<CookEntry>> fetchCookHistory(String userId) async {
+    final res = await _client
+        .from(TableNames.cookHistory)
+        .select()
+        .eq('user_id', userId)
+        .order('cooked_at', ascending: false)
+        .limit(100);
+    return _rows(res).map(CookEntry.fromRow).toList();
+  }
+
+  @override
+  Future<ContentWriteResult> logCook(
+    String userId, {
+    required String title,
+    required String emoji,
+    int? recipeId,
+    String? imageUrl,
+    int? rating,
+  }) async {
+    try {
+      await _client.from(TableNames.cookHistory).insert({
+        'user_id': userId,
+        'recipe_id': recipeId,
+        'title': title,
+        'emoji': emoji,
+        'image_url': imageUrl,
+        'rating': rating,
+      });
+      return const ContentWriteResult.ok();
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
     }
   }
 

@@ -24,4 +24,9 @@ class CookSession {
 
   /// Heat level (0-3) of the dish, used to gate the "Spice Seeker" badge.
   int heat = 0;
+
+  /// Recipe id + visuals, logged to `cook_history` when cooking finishes.
+  int? recipeId;
+  String emoji = '🍽';
+  String? imageUrl;
 }

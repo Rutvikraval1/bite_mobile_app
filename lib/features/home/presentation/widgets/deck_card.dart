@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/state/app_state.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -8,6 +9,7 @@ import '../../../../core/utils/bite_scale.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../../content/domain/entities/bite_card.dart';
+import '../../../social/presentation/blocs/follow_cubit.dart';
 import '../../../../core/widgets/app_network_image.dart';
 
 /// Full-bleed current card — ports the current-card block from
@@ -57,7 +59,6 @@ class DeckCard extends StatefulWidget {
 }
 
 class _DeckCardState extends State<DeckCard> {
-  bool _followed = false;
   bool _showTags = false;
 
   @override
@@ -147,8 +148,11 @@ class _DeckCardState extends State<DeckCard> {
               onToggleInfo: widget.onToggleInfo,
               onTap: widget.onTap,
               onCreatorTap: widget.onCreatorTap,
-              followed: _followed,
-              onFollowToggle: () => setState(() => _followed = !_followed),
+              followed: context.select<FollowCubit, bool>(
+                (f) => f.isFollowing(card.creator),
+              ),
+              onFollowToggle: () =>
+                  context.read<FollowCubit>().toggle(card.creator),
               onOrderTap: widget.onOrderTap,
               onMealTap: widget.onMealTap,
               onFavoriteTap: widget.onFavoriteTap,
