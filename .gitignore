@@ -44,3 +44,18 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# ── Secrets / per-environment config (never commit) ──
+.env.*
+!.env.example
+# Firebase client config — download from the Firebase console.
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+# Android release signing
+android/key.properties
+*.jks
+*.keystore
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/

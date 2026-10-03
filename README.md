@@ -143,6 +143,18 @@ SUPABASE_ANON_KEY=<your-supabase-anon-key>
 **Important:**
 - The `.env` file **must exist** before building. It is listed as an asset in `pubspec.yaml`, so the build fails without it.
 - `.env` is in `.gitignore`. **Never commit it.**
+- Start from `.env.example` (`cp .env.example .env`) and fill in the values.
+
+### Firebase config files (not in git)
+
+Push notifications need the Firebase client config files. They are **gitignored** — download them from the Firebase console (Project settings → Your apps) and place them at:
+
+| Platform | File | Location |
+|---|---|---|
+| Android | `google-services.json` | `android/app/google-services.json` |
+| iOS | `GoogleService-Info.plist` | `ios/Runner/GoogleService-Info.plist` |
+
+The Android build fails without `google-services.json` because the Google Services Gradle plugin is applied.
 - Only use the **anon** key. Never put the Supabase `service_role` key in the app.
 
 ### How config is loaded
