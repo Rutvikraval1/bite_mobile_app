@@ -50,29 +50,34 @@ class _ToastOverlayState extends State<ToastOverlay> {
       child: SlideUp(
         key: ValueKey(message),
         duration: const Duration(milliseconds: 300),
-        child: IgnorePointer(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1A1A).withValues(alpha: 0.95),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.glassBorder),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.4),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
+        // Sits above the Navigator with no Material ancestor — without this
+        // the text gets Flutter's yellow "missing Material" underline.
+        child: Material(
+          type: MaterialType.transparency,
+          child: IgnorePointer(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A).withValues(alpha: 0.95),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppColors.glassBorder),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.4),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
                 ),
-              ],
-            ),
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
               ),
             ),
           ),

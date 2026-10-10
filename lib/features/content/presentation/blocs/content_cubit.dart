@@ -159,6 +159,34 @@ class ContentCubit extends Cubit<ContentState> {
     return result;
   }
 
+  /// Saves edits to one of the user's recipes. The catalog copy follows the
+  /// new status: published recipes stay/appear in the deck, drafts leave it.
+  Future<ContentWriteResult<BiteCard>> updateRecipe(
+    int recipeId,
+    RecipeDraft draft,
+  ) async {
+    final userId = _userId;
+    if (userId == null) {
+      return ContentWriteResult.failure('Not authenticated');
+    }
+    final result = await _repository.updateRecipe(userId, recipeId, draft);
+    final card = result.data;
+    if (result.isSuccess && card != null && !isClosed) {
+      final inCatalog = state.recipes.any((r) => r.id == recipeId);
+      emit(state.copyWith(
+        myRecipes: [
+          for (final r in state.myRecipes) r.id == recipeId ? card : r,
+        ],
+        recipes: card.isDraft
+            ? state.recipes.where((r) => r.id != recipeId).toList()
+            : inCatalog
+                ? [for (final r in state.recipes) r.id == recipeId ? card : r]
+                : [card, ...state.recipes],
+      ));
+    }
+    return result;
+  }
+
   Future<ContentWriteResult> deleteRecipe(int recipeId) async {
     final userId = _userId;
     if (userId == null) {
@@ -199,12 +227,16 @@ class ContentCubit extends Cubit<ContentState> {
   }
 
   /// Load the global catalog. Fetch-once; retry on error.
-  Future<void> loadContent() async {
-    if (isClosed) return;
-    emit(state.copyWith(loading: true, clearError: true));
+  ///
+  /// [silent] (pull-to-refresh) keeps the current cards on screen instead of
+  /// showing the loading skeleton, and keeps them if the reload fails.
+  /// Returns whether the load succeeded.
+  Future<bool> loadContent({bool silent = false}) async {
+    if (isClosed) return false;
+    if (!silent) emit(state.copyWith(loading: true, clearError: true));
     try {
       final catalog = await _repository.fetchContent();
-      if (isClosed) return;
+      if (isClosed) return false;
       emit(state.copyWith(
         recipes: catalog.recipes,
         drinks: catalog.drinks,
@@ -212,9 +244,17 @@ class ContentCubit extends Cubit<ContentState> {
         loading: false,
         clearError: true,
       ));
+      return true;
     } catch (e) {
-      if (isClosed) return;
-      emit(state.copyWith(loading: false, error: e.toString()));
+      debugPrint('[content] loadContent failed: $e');
+      if (isClosed) return false;
+      final hasCards = state.recipes.isNotEmpty || state.drinks.isNotEmpty || state.places.isNotEmpty;
+      if (silent && hasCards) return false;
+      emit(state.copyWith(
+        loading: false,
+        error: "Couldn't load dishes. Check your connection and try again.",
+      ));
+      return false;
     }
   }
 

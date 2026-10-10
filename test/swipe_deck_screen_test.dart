@@ -97,6 +97,14 @@ class _FakeContentRepo implements ContentRepository {
       const ContentWriteResult.ok();
 
   @override
+  Future<ContentWriteResult<BiteCard>> updateRecipe(
+    String userId,
+    int recipeId,
+    RecipeDraft draft,
+  ) async =>
+      const ContentWriteResult.ok();
+
+  @override
   Future<ContentWriteResult> deleteRecipe(String userId, int recipeId) async =>
       const ContentWriteResult.ok();
 

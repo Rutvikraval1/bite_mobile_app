@@ -76,6 +76,7 @@ class _SavedScreenState extends State<SavedScreen> {
           const FloatingPillNav(),
         ],
       ),
+      bottomNavigationBar: const SizedBox(height: 0), 
     );
   }
 
@@ -352,7 +353,10 @@ class _SavedScreenState extends State<SavedScreen> {
             child: Text('Your personal cookbook — recipes you created', style: TextStyle(color: AppColors.muted, fontSize: 12)),
           ),
           GestureDetector(
-            onTap: () => context.read<FlowCubit>().setScreen(AppScreen.creatorCreate),
+            onTap: () {
+              context.read<AppStateCubit>().editRecipe(null);
+              context.read<FlowCubit>().setScreen(AppScreen.creatorCreate);
+            },
             child: Container(
               padding: const EdgeInsets.all(16),
               margin: const EdgeInsets.only(bottom: 12),
@@ -428,6 +432,30 @@ class _SavedScreenState extends State<SavedScreen> {
                         ],
                       ),
                     ),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        context.read<AppStateCubit>().editRecipe(r);
+                        context.read<FlowCubit>().setScreen(AppScreen.creatorCreate);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: AppColors.coral.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(100),
+                          border: Border.all(color: AppColors.coral.withValues(alpha: 0.25)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.edit_outlined, size: 13, color: AppColors.coral),
+                            SizedBox(width: 4),
+                            Text('Edit', style: TextStyle(color: AppColors.coral, fontSize: 11, fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
                     Icon(Icons.chevron_right_rounded, size: 14, color: AppColors.muted),
                   ],
                 ),

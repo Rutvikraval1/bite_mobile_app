@@ -10,6 +10,7 @@ import '../../../../core/widgets/animations/entrance.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
 import '../../../notifications/domain/app_notification.dart';
 import '../../../notifications/presentation/blocs/notifications_cubit.dart';
+import '../social_navigation.dart';
 
 /// Notification inbox backed by `public.notifications` (live via Realtime).
 /// Tap opens the linked recipe/screen and marks it read; swipe to dismiss.
@@ -31,6 +32,7 @@ class NotificationCenterScreen extends StatelessWidget {
       context.read<FlowCubit>().setScreen(AppScreen.recipeDetail);
       return;
     }
+    if (openSocialTarget(context, n.data)) return;
     final dest = AppScreen.values.where((s) => s.name == n.actionDest).firstOrNull;
     if (dest != null) context.read<FlowCubit>().setScreen(dest);
   }

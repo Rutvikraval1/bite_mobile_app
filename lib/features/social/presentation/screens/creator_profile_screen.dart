@@ -3,24 +3,37 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../../core/constants/tier_definitions.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/formatters.dart';
 import '../../../../core/widgets/animations/entrance.dart';
+import '../../../../core/widgets/app_states.dart';
 import '../../../../core/widgets/avatar_img.dart';
 import '../../../../core/widgets/glass.dart';
-import '../../../content/data/image_urls.dart';
+import '../../../auth/presentation/blocs/auth_cubit.dart';
+import '../../../content/domain/entities/bite_card.dart';
+import '../../../content/presentation/blocs/content_cubit.dart';
 import '../../data/chat_selection.dart';
 import '../../../../core/widgets/app_network_image.dart';
+import '../../domain/social_models.dart';
 import '../blocs/follow_cubit.dart';
+import '../blocs/social_feed_cubit.dart';
+import '../social_navigation.dart';
+
+const List<Color> _recipeTints = [
+  AppColors.coral,
+  AppColors.amber,
+  AppColors.cyan,
+  AppColors.placesPurple,
+  Color(0xFF4CAF50),
+];
 
 /// Creator profile — ports `CreatorProfileScreen` from `screens-social.jsx`.
-///
-/// The prototype always renders the same demo creator (@chefpriya /
-/// "Priya Kim") regardless of which post/avatar was tapped to get here, so
-/// this port does the same — it's a fixed showcase profile, not driven by
-/// which feed item launched it.
+/// Shows the creator picked via [CreatorSelection] (feed avatar, creator
+/// card, notification…), loaded from `public.creators` + their recipes.
 class CreatorProfileScreen extends StatefulWidget {
   const CreatorProfileScreen({super.key});
 
@@ -33,25 +46,88 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
   String? _menuToast;
   Timer? _toastTimer;
 
-  static const _recipes = [
-    ('Kimchi Jjigae', '🍲', '1.8K', AppColors.coral, '8934866'),
-    ('Tteokbokki', '🌶', '1.5K', AppColors.amber, '958550'),
-    ('Bulgogi Bowls', '🥩', '2.1K', AppColors.cyan, '24738513'),
-    ('Japchae Noodles', '🍜', '980', AppColors.placesPurple, '8935153'),
-    ('Korean Corn Dogs', '🌭', '3.2K', Color(0xFF4CAF50), '24738516'),
-    ('Dakgangjeong', '🍗', '1.1K', AppColors.coral, '5773964'),
-  ];
+  final String? _handle = CreatorSelection.instance.handle;
+  Creator? _creator;
+  bool _loading = true;
 
-  static const _tips = [
-    ('@foodielisa', '\$5', 'Gochujang Chicken', '2h ago', '🌶'),
-    ('@marco.eats', '\$3', 'Kimchi Jjigae', '1d ago', '🍲'),
-    ('@noodlequeen', '\$10', 'Tteokbokki', '3d ago', '🌶'),
-  ];
+  /// Whether the user followed this creator when [_creator] was loaded —
+  /// lets the Followers stat move as they tap Follow.
+  bool _followedAtLoad = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final handle = _handle;
+    if (handle != null) {
+      _creator = context.read<SocialFeedCubit>().state.creators.where((c) => c.handle == handle).firstOrNull;
+      _followedAtLoad = context.read<FollowCubit>().isFollowing(handle);
+    }
+    _load();
+  }
+
+  Future<void> _load() async {
+    final handle = _handle;
+    if (handle == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    try {
+      final creator = await context.read<SocialFeedCubit>().repository.fetchCreator(handle);
+      if (!mounted) return;
+      setState(() {
+        _creator = creator ?? _creator;
+        _followedAtLoad = context.read<FollowCubit>().isFollowing(handle);
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('[social] creator load failed: $e');
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   void dispose() {
     _toastTimer?.cancel();
     super.dispose();
+  }
+
+  bool get _isMe {
+    final me = context.read<AuthCubit>().state.user?.id;
+    return me != null && _creator?.profileId == me;
+  }
+
+  Future<void> _mute(String kind) async {
+    setState(() => _showMenu = false);
+    final c = _creator;
+    if (c == null) return;
+    if (_isMe) {
+      ToastService.instance.show("That's you! 😄");
+      return;
+    }
+    final ok = await context.read<SocialFeedCubit>().mute(c.handle, kind: kind);
+    if (!mounted) return;
+    if (!ok) {
+      ToastService.instance.show("⚠️ Couldn't update. Try again.");
+      return;
+    }
+    if (kind == 'block') {
+      final follows = context.read<FollowCubit>();
+      if (follows.isFollowing(c.handle)) follows.toggle(c.handle);
+    }
+    _flashToast(kind == 'block' ? 'Blocked' : 'Muted');
+  }
+
+  Future<void> _report() async {
+    setState(() => _showMenu = false);
+    final c = _creator;
+    if (c == null) return;
+    final ok = await context.read<SocialFeedCubit>().report('creator', c.handle);
+    if (!mounted) return;
+    if (ok) {
+      _flashToast('Reported');
+    } else {
+      ToastService.instance.show("⚠️ Couldn't send report. Try again.");
+    }
   }
 
   void _flashToast(String toast) {
@@ -67,12 +143,66 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
 
   void _openMessage() {
     setState(() => _showMenu = false);
-    ChatSelection.instance.select(const ChatThreadRef(name: 'Priya Kim', avatarLabel: 'P'));
-    context.read<FlowCubit>().setScreen(AppScreen.chatThread);
+    final c = _creator;
+    if (c == null) return;
+    if (_isMe) {
+      ToastService.instance.show("That's you! 😄");
+      return;
+    }
+    if (!c.canMessage) {
+      ToastService.instance.show("💬 ${c.handle} isn't taking messages yet");
+      return;
+    }
+    messageCreator(context, c.handle, name: c.name);
   }
 
   @override
   Widget build(BuildContext context) {
+    final c = _creator;
+    if (c == null) {
+      return Scaffold(
+        backgroundColor: AppColors.bgDark,
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: GestureDetector(
+                  onTap: () => context.read<FlowCubit>().goBack(),
+                  child: const Icon(Icons.arrow_back_rounded, size: 22, color: Colors.white),
+                ),
+              ),
+              Expanded(
+                child: _loading
+                    ? const Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.coral),
+                        ),
+                      )
+                    : const EmptyState(emoji: '🧑‍🍳', title: 'Creator not found', message: 'This profile may have been removed.'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final recipes = _recipesOf(c, context.watch<ContentCubit>().state);
+    final featured = recipes.where((r) => r.id == c.featuredRecipeId).firstOrNull ??
+        (recipes.isEmpty
+            ? null
+            : recipes.reduce((a, b) => Formatters.numOf(a.hearts) >= Formatters.numOf(b.hearts) ? a : b));
+    final following = context.select<FollowCubit, bool>((f) => f.isFollowing(c.handle));
+    final followers = c.followers + (following ? 1 : 0) - (_followedAtLoad ? 1 : 0);
+    final saves = recipes.fold<double>(0, (sum, r) => sum + Formatters.numOf(r.saved)).round();
+    final tier = TierDefinitions.tierFor(c.xp);
+    final highlights = c.highlights.isNotEmpty
+        ? c.highlights
+        : [CreatorHighlight(emoji: tier.emoji, label: tier.name, color: tier.color)];
+
     return Scaffold(
       backgroundColor: AppColors.bgDark,
       body: SafeArea(
@@ -112,34 +242,31 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                             boxShadow: [BoxShadow(color: AppColors.coral.withValues(alpha: 0.2), blurRadius: 24)],
                           ),
                           clipBehavior: Clip.antiAlias,
-                          child: AvatarImg(emoji: '👩‍🍳', imageUrl: ImageUrls.avatar('34238049'), size: 82, borderWidth: 0),
+                          child: AvatarImg(emoji: c.avatarEmoji, imageUrl: c.avatarUrl, size: 82, borderWidth: 0),
                         ),
                         const SizedBox(height: 12),
-                        const Text('Priya Kim', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+                        Text(c.name, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
                         const SizedBox(height: 2),
-                        const Text('@chefpriya', style: TextStyle(color: AppColors.coral, fontSize: 13, fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 4),
-                        const Text('Korean Cuisine Creator · Seoul → NYC',
-                            style: TextStyle(color: AppColors.muted, fontSize: 12)),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Bringing the heat from Seoul to your kitchen 🌶🔥 Traditional meets modern. '
-                          '2x b🌶te Challenge winner.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Color(0x80FFFFFF), fontSize: 12, height: 1.5),
-                        ),
+                        Text(c.handle, style: const TextStyle(color: AppColors.coral, fontSize: 13, fontWeight: FontWeight.w600)),
+                        if (c.tagline.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(c.tagline, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                        ],
+                        if (c.bio.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            c.bio,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Color(0x80FFFFFF), fontSize: 12, height: 1.5),
+                          ),
+                        ],
                         const SizedBox(height: 16),
                         Wrap(
                           alignment: WrapAlignment.center,
                           spacing: 6,
                           runSpacing: 6,
                           children: [
-                            for (final b in const [
-                              ('🏆', '2x Winner', Color(0xFFFFD700)),
-                              ('🔥', 'Top Creator', AppColors.coral),
-                              ('📸', '500+ Cooks', AppColors.cyan),
-                              ('⭐', '4.9 Rating', AppColors.amber),
-                            ])
+                            for (final b in [for (final h in highlights) (h.emoji, h.label, h.color)])
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                 decoration: BoxDecoration(
@@ -162,7 +289,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const _FollowButton(),
+                            _FollowButton(handle: c.handle),
                             const SizedBox(width: 8),
                             GestureDetector(
                               onTap: _openMessage,
@@ -208,7 +335,12 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        for (final s in const [('47', 'Recipes'), ('12.4K', 'Followers'), ('1.8K', 'Following'), ('38.2K', 'Saves')])
+                        for (final s in [
+                          ('${c.recipes}', 'Recipes'),
+                          (Formatters.compact(followers), 'Followers'),
+                          (Formatters.compact(c.following), 'Following'),
+                          (Formatters.compact(saves), 'Saves'),
+                        ])
                           Column(
                             children: [
                               Text(s.$1, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
@@ -218,6 +350,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                       ],
                     ),
                   ),
+                  if (c.specialties.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
                     child: Column(
@@ -230,7 +363,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                           spacing: 6,
                           runSpacing: 6,
                           children: [
-                            for (final s in const ['🇰🇷 Korean', '🌶 Spicy', '🍗 Fried Chicken', '🥘 Stews', '🥟 Dumplings', '🔥 Grilling'])
+                            for (final s in c.specialties)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                                 decoration: BoxDecoration(
@@ -245,12 +378,14 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                       ],
                     ),
                   ),
+                  if (c.specialties.isEmpty) const SizedBox(height: 14),
+                  if (featured != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Glass(
                       borderRadius: 20,
                       padding: EdgeInsets.zero,
-                      onTap: () => context.read<FlowCubit>().setScreen(AppScreen.recipeDetail),
+                      onTap: () => openRecipe(context, featured.id),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -262,10 +397,16 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                               child: Stack(
                                 fit: StackFit.expand,
                                 children: [
-                                  AppNetworkImage(
-                                    ImageUrls.large('5774006'),
-                                    errorBuilder: (_) => const ColoredBox(color: AppColors.bgCard),
-                                  ),
+                                  if (featured.image != null)
+                                    AppNetworkImage(
+                                      featured.image!,
+                                      errorBuilder: (_) => const ColoredBox(color: AppColors.bgCard),
+                                    )
+                                  else
+                                    ColoredBox(
+                                      color: AppColors.bgCard,
+                                      child: Center(child: Text(featured.emoji, style: const TextStyle(fontSize: 44))),
+                                    ),
                                   const DecoratedBox(
                                     decoration: BoxDecoration(
                                       gradient: LinearGradient(
@@ -295,20 +436,22 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('Gochujang Glazed Fried Chicken',
-                                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 4),
-                                  child: Text('Her signature dish · 2.4K saves · 89 comments',
-                                      style: TextStyle(color: AppColors.muted, fontSize: 12)),
+                                Text(featured.title,
+                                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
+                                  child: Text('Signature dish · ${featured.saved} saves · ${featured.comments} comments',
+                                      style: const TextStyle(color: AppColors.muted, fontSize: 12)),
                                 ),
-                                const Row(
+                                Row(
                                   children: [
-                                    Text('⏱ 25 min', style: TextStyle(color: AppColors.muted, fontSize: 11)),
-                                    SizedBox(width: 12),
-                                    Text('🔥 Medium', style: TextStyle(color: AppColors.muted, fontSize: 11)),
-                                    SizedBox(width: 12),
-                                    Text('🌶🌶', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                                    Text('⏱ ${featured.time}', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                                    const SizedBox(width: 12),
+                                    Text('🔥 ${featured.diff}', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                                    if (featured.heat > 0) ...[
+                                      const SizedBox(width: 12),
+                                      Text('🌶' * featured.heat, style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                                    ],
                                   ],
                                 ),
                               ],
@@ -318,6 +461,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                       ),
                     ),
                   ),
+                  if (recipes.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                     child: Text('ALL RECIPES',
@@ -329,13 +473,13 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                       spacing: 12,
                       runSpacing: 12,
                       children: [
-                        for (var i = 0; i < _recipes.length; i++)
+                        for (var i = 0; i < recipes.length; i++)
                           SizedBox(
                             width: (MediaQuery.sizeOf(context).width - 24 - 12) / 2,
                             child: ZoomIn(
                               duration: Duration(milliseconds: 200 + i * 40),
                               child: GestureDetector(
-                                onTap: () => context.read<FlowCubit>().setScreen(AppScreen.recipeDetail),
+                                onTap: () => openRecipe(context, recipes[i].id),
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(16),
                                   child: SizedBox(
@@ -343,10 +487,17 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                                     child: Stack(
                                       fit: StackFit.expand,
                                       children: [
-                                        AppNetworkImage(
-                                          ImageUrls.small(_recipes[i].$5),
-                                          errorBuilder: (_) => ColoredBox(color: _recipes[i].$4.withValues(alpha: 0.2)),
-                                        ),
+                                        if (recipes[i].image != null)
+                                          AppNetworkImage(
+                                            recipes[i].image!,
+                                            errorBuilder: (_) => ColoredBox(
+                                                color: _recipeTints[i % _recipeTints.length].withValues(alpha: 0.2)),
+                                          )
+                                        else
+                                          ColoredBox(
+                                            color: _recipeTints[i % _recipeTints.length].withValues(alpha: 0.2),
+                                            child: Center(child: Text(recipes[i].emoji, style: const TextStyle(fontSize: 32))),
+                                          ),
                                         DecoratedBox(
                                           decoration: BoxDecoration(
                                             gradient: LinearGradient(
@@ -363,9 +514,11 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Text(_recipes[i].$1,
+                                              Text(recipes[i].title,
+                                                  maxLines: 2,
+                                                  overflow: TextOverflow.ellipsis,
                                                   style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                                              Text('❤️ ${_recipes[i].$3}',
+                                              Text('❤️ ${recipes[i].hearts}',
                                                   style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 11)),
                                             ],
                                           ),
@@ -380,6 +533,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                       ],
                     ),
                   ),
+                  if (c.recentTips.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                     child: Column(
@@ -388,7 +542,16 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                         const Text('RECENT TIPS RECEIVED',
                             style: TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
                         const SizedBox(height: 10),
-                        for (final t in _tips)
+                        for (final t in [
+                          for (final tip in c.recentTips)
+                            (
+                              tip.user,
+                              tip.amount,
+                              tip.dish,
+                              tip.hoursAgo < 24 ? '${tip.hoursAgo}h ago' : '${tip.hoursAgo ~/ 24}d ago',
+                              tip.emoji,
+                            ),
+                        ])
                           Container(
                             margin: const EdgeInsets.only(bottom: 6),
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -534,9 +697,9 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                           context.read<FlowCubit>().setScreen(AppScreen.shareSheet);
                         }, false),
                         ('💬 Send Message', _openMessage, false),
-                        ('🔇 Mute', () => _flashToast('Muted'), false),
-                        ('🚫 Block User', () => _flashToast('Blocked'), false),
-                        ('⚠️ Report Profile', () => _flashToast('Reported'), true),
+                        ('🔇 Mute', () => _mute('mute'), false),
+                        ('🚫 Block User', () => _mute('block'), false),
+                        ('⚠️ Report Profile', _report, true),
                       ])
                         GestureDetector(
                           onTap: item.$2,
@@ -593,21 +756,20 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
 /// Follow toggle kept in its own State so tapping it doesn't rebuild the whole
 /// profile screen.
 class _FollowButton extends StatefulWidget {
-  const _FollowButton();
+  const _FollowButton({required this.handle});
+
+  final String handle;
 
   @override
   State<_FollowButton> createState() => _FollowButtonState();
 }
 
 class _FollowButtonState extends State<_FollowButton> {
-  /// This showcase screen always renders @chefpriya (see class docs above).
-  static const _handle = '@chefpriya';
-
   @override
   Widget build(BuildContext context) {
-    final following = context.select<FollowCubit, bool>((f) => f.isFollowing(_handle));
+    final following = context.select<FollowCubit, bool>((f) => f.isFollowing(widget.handle));
     return GestureDetector(
-      onTap: () => context.read<FollowCubit>().toggle(_handle),
+      onTap: () => context.read<FollowCubit>().toggle(widget.handle),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
         padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
@@ -621,4 +783,16 @@ class _FollowButtonState extends State<_FollowButton> {
       ),
     );
   }
+}
+
+/// The creator's published recipes from the loaded catalog.
+List<BiteCard> _recipesOf(Creator c, ContentState content) {
+  final seen = <int>{};
+  return [
+    for (final r in [...content.myRecipes, ...content.recipes])
+      if (!r.isDraft &&
+          (r.creator.toLowerCase() == c.handle || (c.profileId != null && r.authorId == c.profileId)) &&
+          seen.add(r.id))
+        r,
+  ];
 }

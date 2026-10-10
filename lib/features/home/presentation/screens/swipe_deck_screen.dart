@@ -21,6 +21,7 @@ import '../../../auth/domain/entities/auth_state.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/domain/entities/bite_card.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../../social/presentation/blocs/social_feed_cubit.dart';
 import '../widgets/daily_chest_overlay.dart';
 import '../widgets/deck_card.dart';
 import '../widgets/meal_planner_sheet.dart';
@@ -84,6 +85,24 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     super.dispose();
   }
 
+  final GlobalKey<RefreshIndicatorState> _refreshKey = GlobalKey<RefreshIndicatorState>();
+
+  /// Pull-to-refresh: reloads the catalog (silently, cards stay on screen),
+  /// saved items, profile stats (XP / coins / streak) and trending.
+  Future<void> _refresh() async {
+    final content = context.read<ContentCubit>();
+    final results = await Future.wait<Object?>([
+      content.loadContent(silent: true),
+      content.reloadSaved(),
+      context.read<AuthCubit>().refreshProfile(),
+      context.read<SocialFeedCubit>().loadDiscover(),
+    ]);
+    if (!mounted) return;
+    if (results.first == false) {
+      ToastService.instance.show("⚠️ Couldn't refresh. Check your connection.");
+    }
+  }
+
   List<BiteCard> get _deck {
     final state = context.read<ContentCubit>().state;
     final tab = context.read<AppStateCubit>().state.subTab;
@@ -104,6 +123,23 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
   }
 
   DeckTab get _activeTab => context.read<AppStateCubit>().state.subTab;
+
+  /// `saved_items` / `swipes` item_type for the current deck tab.
+  String get _itemType => switch (_activeTab) {
+        DeckTab.drinks => 'drink',
+        DeckTab.places => 'place',
+        DeckTab.food => 'recipe',
+      };
+
+  /// Writes [card] to `saved_items` so it shows in the Saved tab (the
+  /// repository skips duplicates). Toasts if the save fails.
+  Future<void> _saveCard(BiteCard card) async {
+    final result = await context.read<ContentCubit>().saveItem(card, _itemType);
+    if (!result.isSuccess && mounted) {
+      debugPrint('[deck] save failed: ${result.error}');
+      ToastService.instance.show("⚠️ Couldn't save ${card.title}. Try again.");
+    }
+  }
 
   void _setXpFlash(int pts) {
     setState(() => _xpFlash = pts);
@@ -131,7 +167,10 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     final content = context.read<ContentCubit>();
     final deck = _deck;
     if (deck.isEmpty) {
+      // Nothing to swipe — a pull down refreshes instead.
+      final pulled = _dragY < -60;
       setState(() => _dragY = 0);
+      if (pulled) _refreshKey.currentState?.show();
       return;
     }
     final card = deck[_cardIndex % deck.length];
@@ -145,12 +184,9 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
       });
       appState.addXp(8);
       _setXpFlash(8);
+      _saveCard(card);
       content.recordSwipe(
-        itemType: switch (_activeTab) {
-          DeckTab.drinks => 'drink',
-          DeckTab.places => 'place',
-          _ => 'recipe',
-        },
+        itemType: _itemType,
         itemId: card.id,
         action: 'save',
         cuisine: card.cuisine,
@@ -193,11 +229,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
       appState.addXp(4);
       _setXpFlash(4);
       content.recordSwipe(
-        itemType: switch (_activeTab) {
-          DeckTab.drinks => 'drink',
-          DeckTab.places => 'place',
-          _ => 'recipe',
-        },
+        itemType: _itemType,
         itemId: card.id,
         action: 'pass',
         cuisine: card.cuisine,
@@ -239,10 +271,14 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
       });
       final deck = _deck;
       if (deck.isNotEmpty) {
+        final card = deck[_cardIndex % deck.length];
+        // A super-fav is a save too — it lands in the Saved tab.
+        _saveCard(card);
         context.read<ContentCubit>().recordSwipe(
-          itemType: 'recipe',
-          itemId: deck[_cardIndex % deck.length].id,
+          itemType: _itemType,
+          itemId: card.id,
           action: 'super_fav',
+          cuisine: card.cuisine,
         );
       }
       BadgeService.instance.award(const ['super_fav']);
@@ -347,7 +383,16 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bgDark,
-      body: BlocBuilder<ContentCubit, ContentState>(
+      // The deck isn't scrollable (vertical swipes save/pass), so the
+      // indicator is driven by [_PullZone] on the top bar, or by a pull on
+      // an empty deck, via [_refreshKey].
+      body: RefreshIndicator(
+        key: _refreshKey,
+        onRefresh: _refresh,
+        color: AppColors.coral,
+        backgroundColor: AppColors.bgCard,
+        edgeOffset: MediaQuery.paddingOf(context).top,
+        child: BlocBuilder<ContentCubit, ContentState>(
         builder: (context, content) {
           final contentLoading = content.loading;
           return BlocBuilder<AppStateCubit, AppState>(
@@ -433,7 +478,9 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                         right: 0,
                         child: SafeArea(
                           bottom: false,
-                          child: SwipeDeckTopBar(
+                          child: _PullZone(
+                            onPull: () => _refreshKey.currentState?.show(),
+                            child: SwipeDeckTopBar(
                             subTab: state.subTab,
                             onSubTabChanged: (t) {
                               if (t == state.subTab) return;
@@ -492,6 +539,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                             avatarEmoji: auth.profile?.avatarEmoji,
                             avatarUrl: auth.profile?.avatarUrl,
                           ),
+                          ),
                         ),
                       ),
                       // Floating pill nav
@@ -503,7 +551,9 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
             },
           );
         },
+        ),
       ),
+      bottomNavigationBar: const SizedBox(height: 0), // remove default nav bar
     );
   }
 
@@ -1413,6 +1463,40 @@ class _SkeletonCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Pull-down area over the top bar — the deck below uses vertical swipes
+/// for save/pass, so pull-to-refresh starts here. Taps still reach the
+/// top-bar buttons; only a downward drag past the threshold fires [onPull].
+class _PullZone extends StatefulWidget {
+  const _PullZone({required this.onPull, required this.child});
+
+  final VoidCallback onPull;
+  final Widget child;
+
+  @override
+  State<_PullZone> createState() => _PullZoneState();
+}
+
+class _PullZoneState extends State<_PullZone> {
+  double _pulled = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart: (_) => _pulled = 0,
+      onVerticalDragUpdate: (d) => _pulled += d.delta.dy,
+      onVerticalDragEnd: (_) {
+        if (_pulled > 60) {
+          HapticsService.light();
+          widget.onPull();
+        }
+        _pulled = 0;
+      },
+      child: widget.child,
     );
   }
 }

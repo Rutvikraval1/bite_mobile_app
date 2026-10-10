@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -22,7 +23,9 @@ Future<void> main() async {
   }
   AppEnv.validate();
   await FirstLaunchService.instance.load();
-  await PushService.instance.init();
+  // Firebase setup runs in the background — awaiting it here kept the
+  // native launch screen up and delayed the first Flutter frame.
+  unawaited(PushService.instance.init());
   runApp(const BiteApp());
 }
 

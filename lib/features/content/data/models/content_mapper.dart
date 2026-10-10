@@ -30,6 +30,8 @@ abstract final class ContentMapper {
         createdAt: r['created_at'] != null
             ? DateTime.tryParse(r['created_at'].toString())
             : null,
+        prepMin: (r['prep_min'] as num?)?.toInt(),
+        cookMin: (r['cook_min'] as num?)?.toInt(),
       );
 
   static BiteCard drinkFromRow(Map<String, dynamic> d) => BiteCard(

@@ -51,8 +51,13 @@ import 'features/genie/presentation/screens/meal_builder_screen.dart';
 import 'features/home/presentation/screens/swipe_deck_screen.dart';
 import 'features/notifications/data/notification_repository.dart';
 import 'features/notifications/presentation/blocs/notifications_cubit.dart';
+import 'features/social/data/chat_repository.dart';
+import 'features/social/presentation/social_navigation.dart';
 import 'features/social/data/follow_repository.dart';
+import 'features/social/data/social_repository.dart';
+import 'features/social/presentation/blocs/chat_cubit.dart';
 import 'features/social/presentation/blocs/follow_cubit.dart';
+import 'features/social/presentation/blocs/social_feed_cubit.dart';
 import 'features/profile/presentation/screens/community_impact_screen.dart';
 import 'features/profile/presentation/screens/competition_screen.dart';
 import 'features/profile/presentation/screens/creator_create_screen.dart';
@@ -157,6 +162,12 @@ class _BiteShellState extends State<BiteShell> {
         BlocProvider<FollowCubit>(
           create: (_) => FollowCubit(FollowRepository()),
         ),
+        BlocProvider<SocialFeedCubit>(
+          create: (_) => SocialFeedCubit(SocialRepository()),
+        ),
+        BlocProvider<ChatCubit>(
+          create: (_) => ChatCubit(ChatRepository()),
+        ),
         // First launch opens on the welcome gate; later launches on splash.
         BlocProvider<FlowCubit>(
           create: (_) => FlowCubit(
@@ -199,6 +210,8 @@ class _FlowHostState extends State<_FlowHost> {
     context.read<ContentCubit>().bind(userId);
     context.read<NotificationsCubit>().bind(userId);
     context.read<FollowCubit>().bind(userId);
+    context.read<SocialFeedCubit>().bind(userId);
+    context.read<ChatCubit>().bind(userId);
     if (state.authenticated && !state.loading) {
       final profile = state.profile;
       final appState = context.read<AppStateCubit>();
@@ -270,6 +283,7 @@ class _FlowHostState extends State<_FlowHost> {
         return;
       }
     }
+    if (openSocialTarget(context, data)) return;
     context.read<FlowCubit>().setScreen(AppScreen.notifications);
   }
 
@@ -436,7 +450,20 @@ class _BootScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return const Scaffold(
       backgroundColor: AppColors.bgDark,
-      body: Center(child: Text('🌶', style: TextStyle(fontSize: 56))),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('🌶', style: TextStyle(fontSize: 56)),
+            SizedBox(height: 24),
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.coral),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

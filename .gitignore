@@ -12,6 +12,9 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+MILESTONES.md
+SCREEN_STATUS.md
+API_ESTIMATE.md
 
 # IntelliJ related
 *.iml

@@ -66,6 +66,7 @@ class SharedPost {
     this.photo,
     this.name = '',
     this.emoji = '🍽',
+    this.points = 0,
   });
 
   final String comment;
@@ -73,6 +74,9 @@ class SharedPost {
   final String? photo;
   final String name;
   final String emoji;
+
+  /// XP earned by sharing — shown in the feed's points banner.
+  final int points;
 }
 
 /// Global app state shared across every screen.
@@ -107,6 +111,7 @@ class AppState {
     this.trendingMode = false,
     this.activeCardIndex = 0,
     this.selectedRecipe,
+    this.editingRecipe,
     this.hydrated = false,
   });
 
@@ -142,6 +147,10 @@ class AppState {
   /// A specific recipe opened from outside the deck (profile, saved,
   /// notifications). Recipe Detail shows this instead of the deck card.
   final BiteCard? selectedRecipe;
+
+  /// One of the user's own recipes opened in the recipe editor. Null means
+  /// the editor creates a new recipe.
+  final BiteCard? editingRecipe;
 
   /// True once gamification state has been hydrated from the profile.
   final bool hydrated;
@@ -179,6 +188,8 @@ class AppState {
     int? activeCardIndex,
     BiteCard? selectedRecipe,
     bool clearSelectedRecipe = false,
+    BiteCard? editingRecipe,
+    bool clearEditingRecipe = false,
     bool? hydrated,
   }) {
     return AppState(
@@ -215,6 +226,9 @@ class AppState {
       selectedRecipe: clearSelectedRecipe
           ? null
           : selectedRecipe ?? this.selectedRecipe,
+      editingRecipe: clearEditingRecipe
+          ? null
+          : editingRecipe ?? this.editingRecipe,
       hydrated: hydrated ?? this.hydrated,
     );
   }

@@ -100,6 +100,11 @@ class AppStateCubit extends Cubit<AppState> {
   void viewRecipe(BiteCard card) =>
       emit(state.copyWith(selectedRecipe: card));
 
+  /// Open [card] in the recipe editor; null starts a new recipe.
+  void editRecipe(BiteCard? card) => emit(card == null
+      ? state.copyWith(clearEditingRecipe: true)
+      : state.copyWith(editingRecipe: card));
+
   void setNotificationCount(int count) =>
       emit(state.copyWith(notificationCount: count));
 

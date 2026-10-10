@@ -15,6 +15,23 @@ abstract final class Formatters {
     return double.tryParse(trimmed) ?? 0;
   }
 
+  /// Compact count: 890 → "890", 2100 → "2.1K", 1200000 → "1.2M".
+  static String compact(int value) {
+    if (value < 1000) return '$value';
+    if (value < 1000000) return '${(value / 1000).toStringAsFixed(1)}K';
+    return '${(value / 1000000).toStringAsFixed(1)}M';
+  }
+
+  /// Short relative age: "now", "12m", "3h", "2d", "5w".
+  static String timeAgo(DateTime time, {DateTime? now}) {
+    final diff = (now ?? DateTime.now()).difference(time);
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m';
+    if (diff.inDays < 1) return '${diff.inHours}h';
+    if (diff.inDays < 7) return '${diff.inDays}d';
+    return '${diff.inDays ~/ 7}w';
+  }
+
   /// mm:ss from seconds.
   static String mmss(int seconds) {
     final m = (seconds ~/ 60).toString().padLeft(2, '0');

@@ -10,6 +10,7 @@ import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../../content/domain/entities/bite_card.dart';
 import '../../../social/presentation/blocs/follow_cubit.dart';
+import '../../../social/presentation/blocs/social_feed_cubit.dart';
 import '../../../../core/widgets/app_network_image.dart';
 
 /// Full-bleed current card — ports the current-card block from
@@ -1192,6 +1193,11 @@ class _MetaRow extends StatelessWidget {
       'Hard' => AppColors.coral,
       _ => AppColors.amber,
     };
+    // Only recipes in the real top-10 Trending ranking get the pill.
+    final trending = subTab == DeckTab.food &&
+        context.select<SocialFeedCubit, bool>(
+          (c) => c.state.trending.any((t) => t.recipeId == card.id && t.heartsWeek > 0),
+        );
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       // `reverse` already right-aligns short content; a Spacer here would
@@ -1280,7 +1286,7 @@ class _MetaRow extends StatelessWidget {
               ],
             ),
           ],
-          if (subTab != DeckTab.places && !tiny) ...[
+          if (trending && !tiny) ...[
             const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),

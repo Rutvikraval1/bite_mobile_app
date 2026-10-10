@@ -10,11 +10,10 @@ import '../../domain/entities/meal_plan.dart';
 import '../../domain/entities/saved_item.dart';
 import '../../domain/repositories/content_repository.dart';
 import '../models/content_mapper.dart';
-import '../seed_data.dart';
 
-/// Supabase-backed [ContentRepository] with seed fallback.
-/// Mirrors the JS reactive store: real rows replace seeds when present,
-/// and any failure silently keeps the demo data so UX never breaks.
+/// Supabase-backed [ContentRepository]. The catalog comes only from the
+/// database — an empty table shows the deck's empty state and a failed
+/// request throws, so [ContentCubit] shows its error + retry state.
 class ContentRepositoryImpl implements ContentRepository {
   ContentRepositoryImpl({SupabaseClientProvider? provider})
       : _provider = provider ?? SupabaseClientProvider.instance;
@@ -25,43 +24,23 @@ class ContentRepositoryImpl implements ContentRepository {
 
   @override
   Future<ContentCatalog> fetchContent() async {
-    final seeds = ContentCatalog(
-      recipes: SeedData.recipes,
-      drinks: SeedData.drinks,
-      places: SeedData.places,
+    // Fetch the three tables in parallel rather than one after another.
+    final (rRes, dRes, pRes) = await (
+      _client.from(TableNames.recipes).select().order('id'),
+      _client.from(TableNames.drinks).select().order('id'),
+      _client.from(TableNames.places).select().order('id'),
+    ).wait;
+
+    return ContentCatalog(
+      // RLS also returns the caller's own drafts; the deck shows only
+      // published recipes.
+      recipes: _rows(rRes)
+          .map(ContentMapper.recipeFromRow)
+          .where((r) => !r.isDraft)
+          .toList(),
+      drinks: _rows(dRes).map(ContentMapper.drinkFromRow).toList(),
+      places: _rows(pRes).map(ContentMapper.placeFromRow).toList(),
     );
-    try {
-      // Fetch the three tables in parallel rather than one after another.
-      final (rRes, dRes, pRes) = await (
-        _client.from(TableNames.recipes).select().order('id'),
-        _client.from(TableNames.drinks).select().order('id'),
-        _client.from(TableNames.places).select().order('id'),
-      ).wait;
-
-      final recipes = _rows(rRes);
-      final drinks = _rows(dRes);
-      final places = _rows(pRes);
-
-      return ContentCatalog(
-        // RLS also returns the caller's own drafts; the deck shows only
-        // published recipes.
-        recipes: recipes.isEmpty
-            ? seeds.recipes
-            : recipes
-                .map(ContentMapper.recipeFromRow)
-                .where((r) => !r.isDraft)
-                .toList(),
-        drinks: drinks.isEmpty
-            ? seeds.drinks
-            : drinks.map(ContentMapper.drinkFromRow).toList(),
-        places: places.isEmpty
-            ? seeds.places
-            : places.map(ContentMapper.placeFromRow).toList(),
-      );
-    } catch (e) {
-      debugPrint('[content] Falling back to seed data: $e');
-      return seeds;
-    }
   }
 
   @override
@@ -108,6 +87,26 @@ class ContentRepositoryImpl implements ContentRepository {
       final row = await _client
           .from(TableNames.recipes)
           .insert(draft.toRow(authorId: userId, creator: creator))
+          .select()
+          .single();
+      return ContentWriteResult.ok(ContentMapper.recipeFromRow(row));
+    } catch (e) {
+      return ContentWriteResult.failure(e.toString());
+    }
+  }
+
+  @override
+  Future<ContentWriteResult<BiteCard>> updateRecipe(
+    String userId,
+    int recipeId,
+    RecipeDraft draft,
+  ) async {
+    try {
+      final row = await _client
+          .from(TableNames.recipes)
+          .update(draft.toUpdateRow())
+          .eq('author_id', userId)
+          .eq('id', recipeId)
           .select()
           .single();
       return ContentWriteResult.ok(ContentMapper.recipeFromRow(row));

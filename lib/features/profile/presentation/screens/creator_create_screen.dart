@@ -7,16 +7,22 @@ import 'package:image_picker/image_picker.dart';
 import '../../../../core/extensions/context_extensions.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/image_upload_service.dart';
+import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/widgets/app_network_image.dart';
 import '../../../../core/widgets/glass.dart';
 import '../../../../core/widgets/photo_source_sheet.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
+import '../../../content/domain/entities/bite_card.dart';
 import '../../../content/domain/entities/recipe_draft.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
 
 /// Create a recipe in 3 steps — basics, ingredients, method — then publish
 /// (or save as a private draft) to the `recipes` table. The cover photo is
 /// uploaded to the `recipe-images` storage bucket.
+///
+/// When [AppState.editingRecipe] is set, the form opens pre-filled with that
+/// recipe and saving updates its row instead of inserting a new one.
 class CreatorCreateScreen extends StatefulWidget {
   const CreatorCreateScreen({super.key});
 
@@ -29,6 +35,8 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
     'Italian', 'Mexican', 'Indian', 'Chinese', 'Japanese', 'Korean', 'Thai',
     'American', 'Mediterranean', 'French', 'Middle Eastern', 'Various',
   ];
+  static const _minuteOptions = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 75, 90, 120, 150, 180, 240];
+  static const _servesOptions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50];
   static const _emojis = ['🍽', '🍝', '🍜', '🌮', '🍛', '🍣', '🥗', '🍔', '🍕', '🥘', '🍰', '🥞'];
 
   int _step = 0;
@@ -42,6 +50,13 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
   Uint8List? _pickedBytes;
   bool _submitting = false;
 
+  /// The recipe being edited, or null when creating a new one.
+  BiteCard? _editing;
+
+  /// Cover photo already saved on the recipe being edited. Cleared when the
+  /// user removes it; replaced on submit when a new photo was picked.
+  String? _existingImageUrl;
+
   final _title = TextEditingController();
   final _story = TextEditingController();
   final _prep = TextEditingController();
@@ -49,6 +64,45 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
   final _serves = TextEditingController(text: '2');
   final List<TextEditingController> _ingredients = [TextEditingController()];
   final List<TextEditingController> _steps = [TextEditingController()];
+
+  bool get _isEditing => _editing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final appState = context.read<AppStateCubit>();
+    final recipe = appState.state.editingRecipe;
+    if (recipe == null) return;
+    // Consume it so the next "New Recipe" opens a blank form.
+    appState.editRecipe(null);
+    _editing = recipe;
+    _existingImageUrl = recipe.image != null && recipe.image!.isNotEmpty ? recipe.image : null;
+    _title.text = recipe.title;
+    _story.text = recipe.description;
+    if (recipe.prepMin != null || recipe.cookMin != null) {
+      if (recipe.prepMin != null) _prep.text = '${recipe.prepMin}';
+      if (recipe.cookMin != null) _cook.text = '${recipe.cookMin}';
+    } else {
+      // Older recipes only stored the total — put it in the cook field.
+      final minutes = int.tryParse(RegExp(r'\d+').firstMatch(recipe.time)?.group(0) ?? '');
+      if (minutes != null) _cook.text = '$minutes';
+    }
+    _serves.text = '${recipe.serves}';
+    _emoji = recipe.emoji;
+    _cuisine = recipe.cuisine;
+    _difficulty = recipe.diff;
+    _spiceLevel = recipe.heat.clamp(0, 3);
+    if (recipe.ingredients.isNotEmpty) {
+      _ingredients
+        ..clear()
+        ..addAll(recipe.ingredients.map((t) => TextEditingController(text: t)));
+    }
+    if (recipe.steps.isNotEmpty) {
+      _steps
+        ..clear()
+        ..addAll(recipe.steps.map((t) => TextEditingController(text: t)));
+    }
+  }
 
   @override
   void dispose() {
@@ -102,12 +156,16 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
 
   /// Camera/gallery → local preview only. Nothing is uploaded until submit.
   Future<void> _pickPhoto() async {
-    final action = await showPhotoSourceSheet(context, allowRemove: _pickedBytes != null);
+    final action = await showPhotoSourceSheet(
+      context,
+      allowRemove: _pickedBytes != null || _existingImageUrl != null,
+    );
     if (action == null || !mounted) return;
     if (action == PhotoAction.remove) {
       setState(() {
         _pickedFile = null;
         _pickedBytes = null;
+        _existingImageUrl = null;
       });
       return;
     }
@@ -134,19 +192,21 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
     }
     final auth = context.read<AuthCubit>().state;
     final content = context.read<ContentCubit>();
+    final appState = context.read<AppStateCubit>();
     final profile = auth.profile;
     final handle = profile == null || profile.username.isEmpty
         ? '@me'
         : '@${profile.username}';
     setState(() => _submitting = true);
 
-    // 1) Upload the cover photo (if any) to the `recipe-images` bucket.
-    String? imageUrl;
+    // 1) Upload the new cover photo (if any) to the `recipe-images` bucket;
+    //    otherwise keep the recipe's current photo.
+    String? uploadedUrl;
     final picked = _pickedFile;
     final userId = auth.user?.id;
     if (picked != null && userId != null) {
       try {
-        imageUrl = await ImageUploadService.instance.upload(
+        uploadedUrl = await ImageUploadService.instance.upload(
           bucket: ImageBuckets.recipeImages,
           userId: userId,
           file: picked,
@@ -160,33 +220,54 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
       }
     }
 
+    final imageUrl = uploadedUrl ?? _existingImageUrl;
+
     // 2) Save the recipe row with the photo URL.
-    final result = await content.createRecipe(
-          RecipeDraft(
-            title: _title.text,
-            description: _story.text,
-            imageUrl: imageUrl,
-            emoji: _emoji,
-            cuisine: _cuisine,
-            timeMin: '$_totalMinutes min',
-            difficulty: _difficulty,
-            serves: int.parse(_serves.text.trim()),
-            heatLevel: _spiceLevel,
-            tags: [_cuisine.toLowerCase(), _difficulty.toLowerCase()],
-            ingredients: _lines(_ingredients),
-            steps: _lines(_steps),
-            publish: publish,
-          ),
-          creator: handle,
-        );
-    if (!result.isSuccess && imageUrl != null) {
+    final draft = RecipeDraft(
+      title: _title.text,
+      description: _story.text,
+      imageUrl: imageUrl,
+      emoji: _emoji,
+      cuisine: _cuisine,
+      timeMin: '$_totalMinutes min',
+      prepMin: int.tryParse(_prep.text.trim()) ?? 0,
+      cookMin: int.tryParse(_cook.text.trim()) ?? 0,
+      difficulty: _difficulty,
+      serves: int.parse(_serves.text.trim()),
+      heatLevel: _spiceLevel,
+      tags: [_cuisine.toLowerCase(), _difficulty.toLowerCase()],
+      ingredients: _lines(_ingredients),
+      steps: _lines(_steps),
+      publish: publish,
+    );
+    final editing = _editing;
+    final result = editing == null
+        ? await content.createRecipe(draft, creator: handle)
+        : await content.updateRecipe(editing.id, draft);
+    if (!result.isSuccess && uploadedUrl != null) {
       // DB write failed — don't leave the just-uploaded photo orphaned.
-      ImageUploadService.instance.deleteByUrl(ImageBuckets.recipeImages, imageUrl);
+      ImageUploadService.instance.deleteByUrl(ImageBuckets.recipeImages, uploadedUrl);
+    }
+    if (result.isSuccess && editing != null) {
+      // The old cover was replaced or removed — drop it from storage.
+      final oldUrl = editing.image;
+      if (oldUrl != null && oldUrl.isNotEmpty && oldUrl != imageUrl) {
+        ImageUploadService.instance.deleteByUrl(ImageBuckets.recipeImages, oldUrl);
+      }
+      // Keep Recipe Detail in sync if it is showing this recipe.
+      final card = result.data;
+      if (card != null && appState.state.selectedRecipe?.id == card.id) {
+        appState.viewRecipe(card);
+      }
     }
     if (!mounted) return;
     setState(() => _submitting = false);
     if (result.isSuccess) {
-      context.showToast(publish ? '✨ Recipe published! 🎉' : '📝 Draft saved');
+      context.showToast(
+        editing != null
+            ? (publish ? '✅ Recipe updated' : '📝 Draft updated')
+            : (publish ? '✨ Recipe published! 🎉' : '📝 Draft saved'),
+      );
       context.read<FlowCubit>().goBack();
     } else {
       context.showToast("⚠️ Couldn't save recipe: ${result.error}");
@@ -255,7 +336,10 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
                 ),
               ),
             ),
-          Text('Step ${_step + 1} of 3', style: TextStyle(color: AppColors.muted, fontSize: 12)),
+          Text(
+            '${_isEditing ? 'Editing · ' : ''}Step ${_step + 1} of 3',
+            style: TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
           const Spacer(),
           const SizedBox(width: 22),
         ],
@@ -282,7 +366,11 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
           Expanded(
             flex: 2,
             child: _button(
-              label: _submitting ? 'Saving…' : last ? 'Publish Recipe' : 'Next →',
+              label: _submitting
+                  ? 'Saving…'
+                  : last
+                      ? (_isEditing ? 'Update & Publish' : 'Publish Recipe')
+                      : 'Next →',
               filled: true,
               onTap: _submitting ? null : last ? () => _submit(publish: true) : _next,
             ),
@@ -322,6 +410,7 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
   // ── Step 1: basics ──
 
   List<Widget> _basicsStep() {
+    final hasPhoto = _pickedBytes != null || _existingImageUrl != null;
     return [
       GestureDetector(
         onTap: _submitting ? null : _pickPhoto,
@@ -333,15 +422,18 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
             borderRadius: BorderRadius.circular(20),
             color: AppColors.coral.withValues(alpha: 0.03),
             border: Border.all(
-              color: _pickedBytes != null ? const Color(0xFF4CAF50) : AppColors.coral.withValues(alpha: 0.27),
+              color: hasPhoto ? const Color(0xFF4CAF50) : AppColors.coral.withValues(alpha: 0.27),
               width: 2,
             ),
           ),
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (_pickedBytes != null) Image.memory(_pickedBytes!, fit: BoxFit.cover),
-              if (_pickedBytes == null)
+              if (_pickedBytes != null)
+                Image.memory(_pickedBytes!, fit: BoxFit.cover)
+              else if (_existingImageUrl != null)
+                AppNetworkImage(_existingImageUrl!),
+              if (!hasPhoto)
                 Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -355,7 +447,7 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
                     Text('Camera or gallery', style: TextStyle(color: AppColors.muted, fontSize: 12)),
                   ],
                 ),
-              if (_pickedBytes != null)
+              if (hasPhoto)
                 Positioned(
                   right: 10,
                   bottom: 10,
@@ -400,11 +492,11 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
       const SizedBox(height: 16),
       Row(
         children: [
-          Expanded(child: _quickDetail('⏱ Prep (min)', '15', _prep)),
+          Expanded(child: _quickDetail('⏱ Prep (min)', '15', _prep, _minuteOptions, unit: 'min')),
           const SizedBox(width: 10),
-          Expanded(child: _quickDetail('🔥 Cook (min)', '25', _cook)),
+          Expanded(child: _quickDetail('🔥 Cook (min)', '25', _cook, _minuteOptions, unit: 'min')),
           const SizedBox(width: 10),
-          Expanded(child: _quickDetail('🍽 Serves', '4', _serves)),
+          Expanded(child: _quickDetail('🍽 Serves', '4', _serves, _servesOptions)),
         ],
       ),
       const SizedBox(height: 16),
@@ -578,30 +670,96 @@ class _CreatorCreateScreenState extends State<CreatorCreateScreen> {
     );
   }
 
-  Widget _quickDetail(String label, String placeholder, TextEditingController controller) {
-    return Glass(
-      borderRadius: 16,
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        children: [
-          Text(label, textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted, fontSize: 11)),
-          const SizedBox(height: 4),
-          TextField(
-            controller: controller,
-            textAlign: TextAlign.center,
-            keyboardType: TextInputType.number,
-            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-            decoration: InputDecoration(
-              hintText: placeholder,
-              hintStyle: TextStyle(color: AppColors.muted, fontSize: 14, fontWeight: FontWeight.w600),
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(vertical: 4),
-              border: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12))),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12))),
+  /// Select-only field: tapping opens [_pickValue], no keyboard input.
+  Widget _quickDetail(
+    String label,
+    String placeholder,
+    TextEditingController controller,
+    List<int> options, {
+    String? unit,
+  }) {
+    return GestureDetector(
+      onTap: _submitting ? null : () => _pickValue(label, controller, options, unit: unit),
+      child: Glass(
+        borderRadius: 16,
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Text(label, textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted, fontSize: 11)),
+            const SizedBox(height: 4),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.12))),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    controller.text.isEmpty ? placeholder : controller.text,
+                    style: TextStyle(
+                      color: controller.text.isEmpty ? AppColors.muted : Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(Icons.arrow_drop_down_rounded, size: 18, color: AppColors.muted),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  /// Bottom sheet of preset values for prep / cook / serves.
+  Future<void> _pickValue(
+    String label,
+    TextEditingController controller,
+    List<int> options, {
+    String? unit,
+  }) async {
+    FocusScope.of(context).unfocus();
+    final current = int.tryParse(controller.text.trim());
+    // Keep a value loaded from an existing recipe selectable even if it is
+    // not one of the presets.
+    final values = {...options, ?current}.toList()..sort();
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: AppColors.bgCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final v in values)
+                    _chip(
+                      label: unit == null ? '$v' : '$v $unit',
+                      active: v == current,
+                      onTap: () => Navigator.of(sheetContext).pop(v),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => controller.text = '$picked');
   }
 }

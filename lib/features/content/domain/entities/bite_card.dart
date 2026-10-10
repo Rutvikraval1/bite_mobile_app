@@ -44,6 +44,8 @@ class BiteCard {
     this.steps = const [],
     this.publishStatus = 'published',
     this.createdAt,
+    this.prepMin,
+    this.cookMin,
   });
 
   final int id;
@@ -88,6 +90,11 @@ class BiteCard {
   /// `draft` or `published`.
   final String publishStatus;
   final DateTime? createdAt;
+
+  /// Prep / cook minutes as entered in the recipe editor; null for catalog
+  /// recipes and ones saved before these were stored separately.
+  final int? prepMin;
+  final int? cookMin;
 
   bool get isPlace => address != null;
   bool get isDraft => publishStatus == 'draft';

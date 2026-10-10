@@ -83,6 +83,13 @@ abstract interface class ContentRepository {
     RecipeDraft draft,
   );
 
+  /// Update one of the user's own recipes; returns the saved row.
+  Future<ContentWriteResult<BiteCard>> updateRecipe(
+    String userId,
+    int recipeId,
+    RecipeDraft draft,
+  );
+
   /// Delete one of the user's own recipes.
   Future<ContentWriteResult> deleteRecipe(String userId, int recipeId);
 

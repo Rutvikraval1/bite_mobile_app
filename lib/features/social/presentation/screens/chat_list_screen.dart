@@ -1,20 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../../core/constants/tier_definitions.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/toast_service.dart';
+import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/formatters.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/app_states.dart';
 import '../../../../core/widgets/avatar_img.dart';
 import '../../../../core/widgets/floating_pill_nav.dart';
 import '../../../../core/widgets/glass.dart';
 import '../../data/chat_selection.dart';
-import '../../data/mock_social_data.dart';
+import '../../domain/social_models.dart';
+import '../blocs/chat_cubit.dart';
+import '../social_navigation.dart';
 
 /// First character of [name] for avatar labels — safe on empty strings.
-String _initial(String name) => name.isEmpty ? '?' : name[0];
+String _initial(String name) => name.isEmpty ? '?' : name.characters.first;
+
+/// Chat-list timestamp: "2m", "3h", "Yesterday", "4d".
+String _chatTime(DateTime? at) {
+  if (at == null) return '';
+  final t = Formatters.timeAgo(at);
+  if (t == 'now') return 'now';
+  final days = DateTime.now().difference(at).inDays;
+  return days == 1 ? 'Yesterday' : t;
+}
+
+/// Whether a user with [xp] has reached the [level] tier name.
+bool _unlocked(String? level, int xp) {
+  if (level == null) return true;
+  final tier = TierDefinitions.all.where((t) => t.name == level).firstOrNull;
+  return tier == null || xp >= tier.min;
+}
+
+ChatThreadRef _refFor(ChatConversation c) => ChatThreadRef(
+      conversationId: c.id,
+      name: c.title,
+      avatarLabel: c.isGroup ? c.emoji : _initial(c.title).toUpperCase(),
+      kind: c.kind,
+      peerUserId: c.isGroup ? null : c.peer?.userId,
+      peerHandle: c.isGroup ? null : c.peer?.handle,
+      subtitle: c.isGroup ? 'Group' : null,
+    );
+
+ChatThreadRef _roomRef(ChatRoom r) => ChatThreadRef(
+      conversationId: r.id,
+      name: r.name,
+      avatarLabel: r.emoji,
+      kind: r.kind,
+      subtitle: r.isKitchen ? 'Live Kitchen' : 'Group',
+    );
 
 /// Messages hub — ports `ChatListScreen` from `screens-social.jsx`.
 /// Reachable via the bottom [FloatingPillNav]; renders full-screen leaving
@@ -28,18 +67,36 @@ class ChatListScreen extends StatefulWidget {
 
 class _ChatListScreenState extends State<ChatListScreen> {
   String _activeTab = 'messages';
-  final Set<int> _requestDismissed = {};
   String _groupTier = 'foodies';
 
-  void _openThread(ChatThreadRef ref) {
-    ChatSelection.instance.select(ref);
-    context.read<FlowCubit>().setScreen(AppScreen.chatThread);
+  @override
+  void initState() {
+    super.initState();
+    final chat = context.read<ChatCubit>();
+    if (!chat.state.loading) chat.refresh();
+  }
+
+  void _openThread(ChatThreadRef ref) => openThread(context, ref);
+
+  Future<void> _openRoom(ChatRoom room, {required String toast}) async {
+    final chat = context.read<ChatCubit>();
+    final wasMember = chat.state.joinedRooms.containsKey(room.id);
+    final ok = await chat.joinRoom(room.id);
+    if (!mounted) return;
+    if (!ok) {
+      ToastService.instance.show("⚠️ Couldn't join ${room.name}. Try again.");
+      return;
+    }
+    _openThread(_roomRef(room));
+    ToastService.instance.show(wasMember ? 'Opening ${room.name}...' : toast);
   }
 
   @override
   Widget build(BuildContext context) {
-    final unreadCount = mockChats.where((c) => c.unread).length;
-    final requestCount = mockChatRequests.length - _requestDismissed.length;
+    final chat = context.watch<ChatCubit>();
+    final state = chat.state;
+    final unreadCount = chat.unreadCount();
+    final requestCount = state.requests.length;
 
     return Scaffold(
       backgroundColor: AppColors.bgDark,
@@ -61,7 +118,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
                         const Text('Messages',
                             style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
                         GestureDetector(
-                          onTap: () => ToastService.instance.show('✏️ New conversation...'),
+                          onTap: () => ToastService.instance
+                              .show("✏️ Open a creator's profile and tap 💬 Message to start a chat"),
                           child: const Icon(Icons.edit_outlined, size: 20, color: AppColors.muted),
                         ),
                       ],
@@ -115,9 +173,22 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  if (_activeTab == 'groups') _buildGroupsTab(),
-                  if (_activeTab == 'messages') _buildMessagesTab(),
-                  if (_activeTab == 'requests') _buildRequestsTab(),
+                  if (state.loading)
+                    const Padding(
+                      padding: EdgeInsets.all(40),
+                      child: Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.coral),
+                        ),
+                      ),
+                    )
+                  else ...[
+                    if (_activeTab == 'groups') _buildGroupsTab(state),
+                    if (_activeTab == 'messages') _buildMessagesTab(state, chat.userId),
+                    if (_activeTab == 'requests') _buildRequestsTab(state),
+                  ],
                 ],
               ),
             ),
@@ -125,36 +196,50 @@ class _ChatListScreenState extends State<ChatListScreen> {
           const FloatingPillNav(),
         ],
       ),
+      bottomNavigationBar: const SizedBox(height: 0), 
     );
   }
 
-  Widget _buildMessagesTab() {
+  Widget _buildMessagesTab(ChatState state, String? myId) {
+    final chats = state.messages;
     return Column(
       children: [
-        for (var i = 0; i < mockChats.length; i++)
+        // The AI Genie chat is always pinned first.
+        ZoomIn(
+          duration: const Duration(milliseconds: 220),
+          child: _ChatRow(
+            name: '🧞 Food Genie',
+            preview: 'Ask me what to cook with what you have...',
+            time: '',
+            unread: false,
+            isGenie: true,
+            onTap: () => context.read<FlowCubit>().setScreen(AppScreen.genieChat),
+          ),
+        ),
+        for (var i = 0; i < chats.length; i++)
           ZoomIn(
-            duration: Duration(milliseconds: 220 + i * 25),
+            duration: Duration(milliseconds: 220 + (i + 1) * 25),
             child: _ChatRow(
-              chat: mockChats[i],
-              onTap: () {
-                final chat = mockChats[i];
-                if (chat.isGenie) {
-                  context.read<FlowCubit>().setScreen(AppScreen.genieChat);
-                  return;
-                }
-                _openThread(ChatThreadRef(name: chat.name, avatarLabel: _initial(chat.name).toUpperCase()));
-              },
+              name: chats[i].title,
+              preview: chats[i].lastMessagePreview.isEmpty ? 'Say hi 👋' : chats[i].lastMessagePreview,
+              time: _chatTime(chats[i].lastMessageAt ?? chats[i].createdAt),
+              unread: myId != null && chats[i].unreadFor(myId),
+              onTap: () => _openThread(_refFor(chats[i])),
             ),
+          ),
+        if (chats.isEmpty)
+          const EmptyState(
+            emoji: '💬',
+            title: 'No messages yet',
+            message: "Open a creator's profile and tap 💬 Message to start chatting.",
+            compact: true,
           ),
       ],
     );
   }
 
-  Widget _buildRequestsTab() {
-    final visible = [
-      for (var i = 0; i < mockChatRequests.length; i++)
-        if (!_requestDismissed.contains(i)) i,
-    ];
+  Widget _buildRequestsTab(ChatState state) {
+    final visible = state.requests;
     if (visible.isEmpty) {
       return const EmptyState(
         emoji: '📭',
@@ -175,17 +260,27 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   style: TextStyle(color: AppColors.muted, fontSize: 12)),
             ),
           ),
-          for (final i in visible)
+          for (final (i, request) in visible.indexed)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: ZoomIn(
                 duration: Duration(milliseconds: 220 + i * 40),
                 child: _RequestCard(
-                  request: mockChatRequests[i],
-                  onAccept: () => _openThread(
-                    ChatThreadRef(name: mockChatRequests[i].name, avatarLabel: _initial(mockChatRequests[i].name)),
-                  ),
-                  onDecline: () => setState(() => _requestDismissed.add(i)),
+                  name: request.title,
+                  preview: request.lastMessagePreview,
+                  time: _chatTime(request.lastMessageAt ?? request.createdAt),
+                  avatarEmoji: request.peer?.avatarEmoji ?? '🧑‍🍳',
+                  avatarUrl: request.peer?.avatarUrl,
+                  onAccept: () async {
+                    final ok = await context.read<ChatCubit>().acceptRequest(request.id);
+                    if (!mounted) return;
+                    if (ok) {
+                      _openThread(_refFor(request));
+                    } else {
+                      ToastService.instance.show("⚠️ Couldn't accept. Try again.");
+                    }
+                  },
+                  onDecline: () => context.read<ChatCubit>().declineRequest(request.id),
                 ),
               ),
             ),
@@ -194,8 +289,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
     );
   }
 
-  Widget _buildGroupsTab() {
-    final groups = mockCommunityGroups[_groupTier] ?? const [];
+  Widget _buildGroupsTab(ChatState state) {
+    final groups = state.communities(_groupTier);
+    final kitchens = state.kitchens;
+    final myGroups = state.groups;
+    final xp = context.select<AppStateCubit, int>((c) => c.state.xp);
     final tierColor = switch (_groupTier) {
       'creators' => AppColors.cyan,
       'critics' => AppColors.amber,
@@ -225,17 +323,17 @@ class _ChatListScreenState extends State<ChatListScreen> {
             height: 92,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              itemCount: mockLiveKitchens.length,
+              itemCount: kitchens.length,
               separatorBuilder: (_, _) => const SizedBox(width: 8),
               itemBuilder: (context, i) {
-                final k = mockLiveKitchens[i];
+                final k = kitchens[i];
+                final active = k.isLive
+                    ? '🟢 Live'
+                    : (k.lastMessageAt == null ? 'Quiet' : '${Formatters.timeAgo(k.lastMessageAt!)} ago');
                 return ZoomIn(
                   duration: Duration(milliseconds: 220 + i * 60),
                   child: GestureDetector(
-                    onTap: () {
-                      _openThread(ChatThreadRef(name: k.name, avatarLabel: k.emoji, isGenie: false, subtitle: 'Live Kitchen'));
-                      ToastService.instance.show('Entering ${k.name}...');
-                    },
+                    onTap: () => _openRoom(k, toast: 'Entering ${k.name}...'),
                     child: Container(
                       width: 140,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
@@ -252,7 +350,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                               Text(k.emoji, style: const TextStyle(fontSize: 22)),
                               const SizedBox(width: 6),
                               Expanded(
-                                child: Text(k.active,
+                                child: Text(active,
                                     style: TextStyle(
                                         color: k.isLive ? const Color(0xFF4CAF50) : AppColors.muted,
                                         fontSize: 10,
@@ -266,7 +364,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
                               style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700, height: 1.3),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis),
-                          Text('${k.members} members', style: const TextStyle(color: AppColors.muted, fontSize: 10)),
+                          Text('${Formatters.compact(k.members)} members',
+                              style: const TextStyle(color: AppColors.muted, fontSize: 10)),
                         ],
                       ),
                     ),
@@ -283,19 +382,18 @@ class _ChatListScreenState extends State<ChatListScreen> {
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Opacity(
-                opacity: groups[i].unlock == 'Sous Chef' ? 0.5 : 1,
+                opacity: _unlocked(groups[i].unlockLevel, xp) ? 1 : 0.5,
                 child: ZoomIn(
                   duration: Duration(milliseconds: 220 + i * 40),
                   child: Glass(
                     borderRadius: 14,
                     padding: const EdgeInsets.all(14),
                     onTap: () {
-                      if (groups[i].unlock == 'Sous Chef') {
-                        ToastService.instance.show('🔒 Reach Sous Chef to unlock this room');
+                      if (!_unlocked(groups[i].unlockLevel, xp)) {
+                        ToastService.instance.show('🔒 Reach ${groups[i].unlockLevel} to unlock this room');
                         return;
                       }
-                      _openThread(ChatThreadRef(name: groups[i].name, avatarLabel: groups[i].emoji, subtitle: 'Group'));
-                      ToastService.instance.show('Joined ${groups[i].name}!');
+                      _openRoom(groups[i], toast: 'Joined ${groups[i].name}!');
                     },
                     child: Row(
                       children: [
@@ -322,20 +420,22 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                         style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
                                         overflow: TextOverflow.ellipsis),
                                   ),
-                                  if (groups[i].unlock != null) ...[
+                                  if (groups[i].unlockLevel != null) ...[
                                     const SizedBox(width: 6),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                                       decoration: BoxDecoration(
-                                        color: groups[i].unlock == 'Sous Chef'
+                                        color: !_unlocked(groups[i].unlockLevel, xp)
                                             ? Colors.white.withValues(alpha: 0.06)
                                             : AppColors.amber.withValues(alpha: 0.08),
                                         borderRadius: BorderRadius.circular(4),
                                       ),
                                       child: Text(
-                                        groups[i].unlock == 'Sous Chef' ? '🔒 Sous Chef' : '✓ ${groups[i].unlock}',
+                                        _unlocked(groups[i].unlockLevel, xp)
+                                            ? '✓ ${groups[i].unlockLevel}'
+                                            : '🔒 ${groups[i].unlockLevel}',
                                         style: TextStyle(
-                                            color: groups[i].unlock == 'Sous Chef' ? AppColors.muted : AppColors.amber,
+                                            color: _unlocked(groups[i].unlockLevel, xp) ? AppColors.amber : AppColors.muted,
                                             fontSize: 8,
                                             fontWeight: FontWeight.w700),
                                       ),
@@ -345,7 +445,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                               ),
                               Padding(
                                 padding: const EdgeInsets.only(top: 2),
-                                child: Text(groups[i].desc,
+                                child: Text(groups[i].description,
                                     style: const TextStyle(color: AppColors.muted, fontSize: 11),
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis),
@@ -356,14 +456,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text(groups[i].members, style: const TextStyle(color: AppColors.muted, fontSize: 10)),
-                            if (groups[i].newCount > 0)
+                            Text(Formatters.compact(groups[i].members),
+                                style: const TextStyle(color: AppColors.muted, fontSize: 10)),
+                            if ((state.roomNewCounts[groups[i].id] ?? 0) > 0)
                               Container(
                                 margin: const EdgeInsets.only(top: 2),
                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                 decoration: BoxDecoration(
                                     color: AppColors.coral.withValues(alpha: 0.13), borderRadius: BorderRadius.circular(100)),
-                                child: Text('${groups[i].newCount} new',
+                                child: Text('${state.roomNewCounts[groups[i].id]} new',
                                     style: const TextStyle(color: AppColors.coral, fontSize: 10, fontWeight: FontWeight.w700)),
                               ),
                           ],
@@ -379,7 +480,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
             child: Text('👨‍👩‍👧‍👦 MY GROUPS',
                 style: TextStyle(color: Color(0xFF4CAF50), fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
           ),
-          for (var i = 0; i < mockMyGroups.length; i++)
+          if (myGroups.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text("You're not in any private groups yet.",
+                  style: TextStyle(color: AppColors.muted, fontSize: 11)),
+            ),
+          for (var i = 0; i < myGroups.length; i++)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: ZoomIn(
@@ -388,8 +495,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   borderRadius: 14,
                   padding: const EdgeInsets.all(14),
                   onTap: () {
-                    _openThread(ChatThreadRef(name: mockMyGroups[i].name, avatarLabel: mockMyGroups[i].emoji, subtitle: 'Group'));
-                    ToastService.instance.show('Opening ${mockMyGroups[i].name}...');
+                    _openThread(_refFor(myGroups[i]));
+                    ToastService.instance.show('Opening ${myGroups[i].title}...');
                   },
                   child: Row(
                     children: [
@@ -402,24 +509,27 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           border: Border.all(color: const Color(0x404CAF50)),
                         ),
                         alignment: Alignment.center,
-                        child: Text(mockMyGroups[i].emoji, style: const TextStyle(fontSize: 20)),
+                        child: Text(myGroups[i].emoji, style: const TextStyle(fontSize: 20)),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(mockMyGroups[i].name,
+                            Text(myGroups[i].title,
                                 style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
-                            Text(mockMyGroups[i].lastMsg, style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                            Text(myGroups[i].lastMessagePreview,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                           ],
                         ),
                       ),
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text('${mockMyGroups[i].members} members', style: const TextStyle(color: AppColors.muted, fontSize: 10)),
-                          Text(mockMyGroups[i].time, style: const TextStyle(color: AppColors.muted, fontSize: 10)),
+                          Text('${myGroups[i].peers.length + 1} members', style: const TextStyle(color: AppColors.muted, fontSize: 10)),
+                          Text(_chatTime(myGroups[i].lastMessageAt), style: const TextStyle(color: AppColors.muted, fontSize: 10)),
                         ],
                       ),
                     ],
@@ -519,13 +629,25 @@ class _GroupTierButton extends StatelessWidget {
 }
 
 class _ChatRow extends StatelessWidget {
-  const _ChatRow({required this.chat, required this.onTap});
+  const _ChatRow({
+    required this.name,
+    required this.preview,
+    required this.time,
+    required this.unread,
+    required this.onTap,
+    this.isGenie = false,
+  });
 
-  final ChatPreview chat;
+  final String name;
+  final String preview;
+  final String time;
+  final bool unread;
+  final bool isGenie;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final chat = this;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -589,14 +711,27 @@ class _ChatRow extends StatelessWidget {
 }
 
 class _RequestCard extends StatelessWidget {
-  const _RequestCard({required this.request, required this.onAccept, required this.onDecline});
+  const _RequestCard({
+    required this.name,
+    required this.preview,
+    required this.time,
+    required this.avatarEmoji,
+    required this.onAccept,
+    required this.onDecline,
+    this.avatarUrl,
+  });
 
-  final ChatRequest request;
+  final String name;
+  final String preview;
+  final String time;
+  final String avatarEmoji;
+  final String? avatarUrl;
   final VoidCallback onAccept;
   final VoidCallback onDecline;
 
   @override
   Widget build(BuildContext context) {
+    final request = this;
     return Glass(
       borderRadius: 16,
       padding: const EdgeInsets.all(14),
@@ -613,7 +748,7 @@ class _RequestCard extends StatelessWidget {
                   gradient: LinearGradient(colors: [AppColors.coral.withValues(alpha: 0.27), AppColors.amber.withValues(alpha: 0.27)]),
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: AvatarImg(emoji: request.avatarEmoji, size: 40, borderWidth: 0),
+                child: AvatarImg(emoji: request.avatarEmoji, imageUrl: request.avatarUrl, size: 40, borderWidth: 0),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -621,8 +756,6 @@ class _RequestCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(request.name, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
-                    if (request.mutual != null)
-                      Text('🔗 ${request.mutual}', style: const TextStyle(color: AppColors.amber, fontSize: 11)),
                   ],
                 ),
               ),

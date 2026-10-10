@@ -2,14 +2,23 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel;
 
-import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/toast_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
+import '../../../content/domain/entities/bite_card.dart';
+import '../../../content/presentation/blocs/content_cubit.dart';
 import '../../data/chat_selection.dart';
-import '../../data/mock_social_data.dart';
+import '../../domain/social_models.dart';
+import '../blocs/chat_cubit.dart';
+import '../blocs/social_feed_cubit.dart';
+import '../social_navigation.dart';
+
+/// Quick-reply chips above the composer.
+const List<String> _quickReplies = ['Sounds great! 🙌', 'Friday works!', "Can't wait 🔥", 'Send recipe?'];
 
 /// A single message bubble — either plain text or a shared-recipe card.
 class _ThreadMessage {
@@ -17,15 +26,16 @@ class _ThreadMessage {
 
   final String from; // me | them
   final String? text;
-  final ChatMessage? recipe;
+  final BiteCard? recipe;
 }
 
-/// One-on-one / group / kitchen chat thread — ports `ChatThreadScreen` from
+/// One-on-one / group / room chat thread — ports `ChatThreadScreen` from
 /// `screens-social.jsx`.
 ///
 /// The screen is instantiated with no constructor args by the router, so it
-/// reads which thread to render from [ChatSelection.instance] — set by
-/// whichever row in [ChatListScreen] was tapped.
+/// reads which conversation to render from [ChatSelection.instance] — set by
+/// the chat list, a creator's "Message" button or a notification. Messages
+/// are live via Realtime; typing and online state use broadcast/presence.
 class ChatThreadScreen extends StatefulWidget {
   const ChatThreadScreen({super.key});
 
@@ -34,26 +44,157 @@ class ChatThreadScreen extends StatefulWidget {
 }
 
 class _ChatThreadScreenState extends State<ChatThreadScreen> {
-  late final ChatThreadRef _thread = ChatSelection.instance.current;
+  ChatThreadRef? _thread = ChatSelection.instance.current;
 
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
-  final List<_ThreadMessage> _sent = [];
+  List<ChatMessageItem> _messages = const [];
+  bool _loading = true;
+  bool _pending = false; // the user hasn't accepted this request yet
   bool _showMenu = false;
   String? _menuAction; // muted | blocked | reported
   bool _isTyping = false;
+  bool _peerOnline = false;
   Timer? _typingTimer;
-  Timer? _replyTimer;
   Timer? _menuActionTimer;
+  Timer? _readTimer;
+  DateTime _lastTypingSent = DateTime(0);
+  RealtimeChannel? _channel;
+
+  late final ChatCubit _chat = context.read<ChatCubit>();
+  String? get _myId => _chat.userId;
+
+  @override
+  void initState() {
+    super.initState();
+    _input.addListener(_onInputChanged);
+    _open();
+  }
 
   @override
   void dispose() {
+    _input.removeListener(_onInputChanged);
     _input.dispose();
     _scroll.dispose();
     _typingTimer?.cancel();
-    _replyTimer?.cancel();
     _menuActionTimer?.cancel();
+    _readTimer?.cancel();
+    final ch = _channel;
+    if (ch != null) _chat.repository.unsubscribe(ch);
     super.dispose();
+  }
+
+  Future<void> _open() async {
+    final ref = _thread;
+    final myId = _myId;
+    if (ref == null || myId == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    final repo = _chat.repository;
+    try {
+      if (ref.isRoom) {
+        await _chat.joinRoom(ref.conversationId);
+        if (ref.name.isEmpty) {
+          final room = await repo.fetchRoom(ref.conversationId);
+          if (room != null && mounted) {
+            setState(() => _thread = ChatThreadRef(
+                  conversationId: room.id,
+                  name: room.name,
+                  avatarLabel: room.emoji,
+                  kind: room.kind,
+                  subtitle: room.isKitchen ? 'Live Kitchen' : 'Group',
+                ));
+          }
+        }
+      } else {
+        // Opened from a notification: fill in who this is with.
+        final c = await repo.fetchConversation(myId, ref.conversationId);
+        if (c != null && mounted) {
+          setState(() {
+            _pending = c.isRequest;
+            if (ref.name.isEmpty || ref.peerUserId == null) {
+              _thread = ChatThreadRef(
+                conversationId: c.id,
+                name: c.title,
+                avatarLabel: c.isGroup ? c.emoji : (c.title.isEmpty ? '?' : c.title.characters.first.toUpperCase()),
+                kind: c.kind,
+                peerUserId: c.isGroup ? null : c.peer?.userId,
+                peerHandle: c.isGroup ? null : c.peer?.handle,
+                subtitle: c.isGroup ? 'Group' : null,
+              );
+            }
+          });
+        }
+      }
+      final messages = await repo.fetchMessages(ref.conversationId);
+      if (!mounted) return;
+      setState(() {
+        _messages = messages;
+        _loading = false;
+      });
+      _jumpToBottom();
+      _chat.markRead(ref.conversationId);
+      _channel = repo.subscribeThread(
+        conversationId: ref.conversationId,
+        userId: myId,
+        onMessage: _onIncoming,
+        onTyping: (_) => _showTyping(),
+        onPresence: (online) {
+          final peer = _thread?.peerUserId;
+          if (mounted) setState(() => _peerOnline = peer != null && online.contains(peer));
+        },
+      );
+    } catch (e) {
+      debugPrint('[chat] open failed: $e');
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ToastService.instance.show("⚠️ Couldn't load messages.");
+    }
+  }
+
+  void _onIncoming(ChatMessageItem m) {
+    if (!mounted || _messages.any((x) => x.id == m.id)) return;
+    // Our own in-flight send echoes back — _send swaps in the saved row.
+    final mine = m.senderId != null && m.senderId == _myId;
+    if (mine && _messages.any((x) => x.pending && x.body == m.body)) return;
+    setState(() {
+      _messages = [..._messages, m];
+      _isTyping = false;
+    });
+    _scrollToBottom();
+    _readTimer?.cancel();
+    _readTimer = Timer(const Duration(milliseconds: 800), () {
+      final id = _thread?.conversationId;
+      if (id != null) _chat.markRead(id);
+    });
+  }
+
+  void _showTyping() {
+    if (!mounted) return;
+    setState(() => _isTyping = true);
+    _scrollToBottom();
+    _typingTimer?.cancel();
+    _typingTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _isTyping = false);
+    });
+  }
+
+  void _onInputChanged() {
+    final ch = _channel;
+    final myId = _myId;
+    if (ch == null || myId == null || _input.text.trim().isEmpty) return;
+    final now = DateTime.now();
+    if (now.difference(_lastTypingSent) < const Duration(seconds: 2)) return;
+    _lastTypingSent = now;
+    _chat.repository.sendTyping(ch, myId);
+  }
+
+  void _jumpToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
   }
 
   void _scrollToBottom() {
@@ -67,34 +208,39 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     });
   }
 
-  void _send([String? text]) {
+  Future<void> _send([String? text]) async {
     final value = (text ?? _input.text).trim();
-    if (value.isEmpty) return;
-    setState(() {
-      _sent.add(_ThreadMessage(from: 'me', text: value));
-      _input.clear();
-    });
+    final ref = _thread;
+    final myId = _myId;
+    if (value.isEmpty || ref == null || myId == null) return;
+    final temp = ChatMessageItem(
+      id: 'local-${DateTime.now().microsecondsSinceEpoch}',
+      conversationId: ref.conversationId,
+      senderId: myId,
+      body: value,
+      createdAt: DateTime.now(),
+      pending: true,
+    );
+    setState(() => _messages = [..._messages, temp]);
+    _input.clear();
     _scrollToBottom();
-    _typingTimer?.cancel();
-    _replyTimer?.cancel();
-    _typingTimer = Timer(const Duration(milliseconds: 800), () {
-      if (!mounted) return;
-      setState(() => _isTyping = true);
-      _scrollToBottom();
-    });
-    _replyTimer = Timer(const Duration(milliseconds: 2500), () {
-      if (!mounted) return;
-      if (mockThreadReplies.isEmpty) {
-        setState(() => _isTyping = false);
-        return;
+    try {
+      if (_pending) {
+        // Replying to a request accepts it.
+        await _chat.acceptRequest(ref.conversationId);
+        _pending = false;
       }
-      final reply = mockThreadReplies[_sent.length % mockThreadReplies.length];
-      setState(() {
-        _isTyping = false;
-        _sent.add(_ThreadMessage(from: 'them', text: reply));
-      });
-      _scrollToBottom();
-    });
+      final sent = await _chat.repository.sendMessage(userId: myId, conversationId: ref.conversationId, body: value);
+      if (!mounted) return;
+      setState(() => _messages = [for (final m in _messages) m.id == temp.id ? sent : m]);
+    } catch (e) {
+      debugPrint('[chat] send failed: $e');
+      if (!mounted) return;
+      setState(() => _messages = [for (final m in _messages) if (m.id != temp.id) m]);
+      if (_input.text.isEmpty) _input.text = value;
+      final blocked = e.toString().contains('blocked');
+      ToastService.instance.show(blocked ? "🚫 You can't message this person." : "⚠️ Message not sent. Try again.");
+    }
   }
 
   void _flashMenuAction(String action, {bool autoClear = true}) {
@@ -110,11 +256,77 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     }
   }
 
+  void _viewProfile() {
+    setState(() => _showMenu = false);
+    final handle = _thread?.peerHandle;
+    if (handle == null) {
+      ToastService.instance.show('👥 ${_thread?.name ?? 'This chat'} is a group');
+      return;
+    }
+    openCreator(context, handle);
+  }
+
+  Future<void> _mute() async {
+    final id = _thread?.conversationId;
+    if (id == null) return;
+    final ok = await _chat.setMuted(id, true);
+    if (!mounted) return;
+    if (ok) {
+      _flashMenuAction('muted');
+    } else {
+      setState(() => _showMenu = false);
+      ToastService.instance.show("⚠️ Couldn't mute. Try again.");
+    }
+  }
+
+  Future<void> _block() async {
+    final handle = _thread?.peerHandle;
+    if (handle == null) {
+      setState(() => _showMenu = false);
+      ToastService.instance.show('👥 Groups can be muted, not blocked');
+      return;
+    }
+    final ok = await context.read<SocialFeedCubit>().mute(handle, kind: 'block');
+    if (!mounted) return;
+    if (ok) {
+      _flashMenuAction('blocked', autoClear: false);
+    } else {
+      setState(() => _showMenu = false);
+      ToastService.instance.show("⚠️ Couldn't block. Try again.");
+    }
+  }
+
+  Future<void> _undoBlock() async {
+    final handle = _thread?.peerHandle;
+    setState(() => _menuAction = null);
+    if (handle != null) await context.read<SocialFeedCubit>().unmute(handle);
+  }
+
+  Future<void> _report() async {
+    final id = _thread?.conversationId;
+    if (id == null) return;
+    final ok = await context.read<SocialFeedCubit>().report('conversation', id);
+    if (!mounted) return;
+    if (ok) {
+      _flashMenuAction('reported');
+    } else {
+      setState(() => _showMenu = false);
+      ToastService.instance.show("⚠️ Couldn't send report. Try again.");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final thread = _thread;
+    final myId = _myId;
+    final content = context.watch<ContentCubit>().state;
     final messages = [
-      for (final m in mockThreadMessages) _ThreadMessage(from: m.from, text: m.text, recipe: m.isRecipe ? m : null),
-      ..._sent,
+      for (final m in _messages)
+        _ThreadMessage(
+          from: m.senderId != null && m.senderId == myId ? 'me' : 'them',
+          text: m.body,
+          recipe: m.recipeId == null ? null : content.findCard(m.recipeId!),
+        ),
     ];
 
     return Scaffold(
@@ -126,18 +338,35 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               children: [
                 _buildHeader(context),
                 Expanded(
-                  child: ListView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                    itemCount: messages.length + (_isTyping ? 1 : 0),
-                    itemBuilder: (context, i) {
-                      if (i == messages.length) return const _TypingBubble();
-                      return _MessageBubble(
-                        message: messages[i],
-                        onOpenRecipe: () => context.read<FlowCubit>().setScreen(AppScreen.recipeDetail),
-                      );
-                    },
-                  ),
+                  child: _loading
+                      ? const Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.coral),
+                          ),
+                        )
+                      : thread == null
+                          ? const Center(
+                              child: Text('Conversation not found', style: TextStyle(color: AppColors.muted)),
+                            )
+                          : messages.isEmpty && !_isTyping
+                              ? Center(
+                                  child: Text('Say hi to ${thread.name.split(' ').first} 👋',
+                                      style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                                )
+                              : ListView.builder(
+                                  controller: _scroll,
+                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                                  itemCount: messages.length + (_isTyping ? 1 : 0),
+                                  itemBuilder: (context, i) {
+                                    if (i == messages.length) return const _TypingBubble();
+                                    return _MessageBubble(
+                                      message: messages[i],
+                                      onOpenRecipe: () => openRecipe(context, messages[i].recipe?.id),
+                                    );
+                                  },
+                                ),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
@@ -145,7 +374,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     spacing: 6,
                     runSpacing: 6,
                     children: [
-                      for (final r in mockThreadQuickReplies)
+                      for (final r in _quickReplies)
                         GestureDetector(
                           onTap: () => _input.text = r,
                           child: Container(
@@ -183,7 +412,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             decoration: InputDecoration(
                               border: InputBorder.none,
                               isCollapsed: true,
-                              hintText: 'Message ${_thread.name.split(' ').first}...',
+                              hintText: 'Message ${(thread?.name ?? '').split(' ').first}...',
                               hintStyle: const TextStyle(color: AppColors.muted, fontSize: 14),
                             ),
                           ),
@@ -221,13 +450,10 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 right: 16,
                 child: _ContextMenu(
                   items: [
-                    ('👤 View Profile', () {
-                      setState(() => _showMenu = false);
-                      context.read<FlowCubit>().setScreen(AppScreen.creatorProfile);
-                    }, false),
-                    ('🔇 Mute Conversation', () => _flashMenuAction('muted'), false),
-                    ('🚫 Block User', () => _flashMenuAction('blocked', autoClear: false), false),
-                    ('⚠️ Report', () => _flashMenuAction('reported'), true),
+                    ('👤 View Profile', _viewProfile, false),
+                    ('🔇 Mute Conversation', _mute, false),
+                    ('🚫 Block User', _block, false),
+                    ('⚠️ Report', _report, true),
                   ],
                 ),
               ),
@@ -240,7 +466,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   duration: const Duration(milliseconds: 250),
                   child: _ActionToast(
                     action: _menuAction!,
-                    onUndo: _menuAction == 'blocked' ? () => setState(() => _menuAction = null) : null,
+                    onUndo: _menuAction == 'blocked' ? _undoBlock : null,
                   ),
                 ),
               ),
@@ -268,20 +494,20 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               gradient: LinearGradient(colors: [AppColors.cyan.withValues(alpha: 0.4), AppColors.coral.withValues(alpha: 0.4)]),
             ),
             alignment: Alignment.center,
-            child: Text(_thread.avatarLabel, style: const TextStyle(fontSize: 14, color: Colors.white)),
+            child: Text(_thread?.avatarLabel ?? '💬', style: const TextStyle(fontSize: 14, color: Colors.white)),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_thread.name,
+                Text(_thread?.name ?? '',
                     style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis),
                 Row(
                   children: [
-                    if (_thread.online) ...[
+                    if (_peerOnline) ...[
                       Container(
                         width: 6,
                         height: 6,
@@ -289,7 +515,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                       ),
                       const SizedBox(width: 4),
                     ],
-                    Text(_thread.subtitle ?? (_thread.online ? 'Online' : ''),
+                    Text(_thread?.subtitle ?? (_peerOnline ? 'Online' : ''),
                         style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                   ],
                 ),
@@ -297,7 +523,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             ),
           ),
           GestureDetector(
-            onTap: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
+            onTap: _viewProfile,
             child: const Padding(
               padding: EdgeInsets.symmetric(horizontal: 6),
               child: Icon(Icons.person_outline_rounded, size: 18, color: AppColors.muted),
@@ -358,7 +584,7 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _buildRecipe(ChatMessage recipe) {
+  Widget _buildRecipe(BiteCard recipe) {
     return GestureDetector(
       onTap: onOpenRecipe,
       child: Padding(
@@ -373,17 +599,17 @@ class _MessageBubble extends StatelessWidget {
                 gradient: LinearGradient(colors: [AppColors.coral.withValues(alpha: 0.27), AppColors.bgCard]),
               ),
               alignment: Alignment.center,
-              child: Text(recipe.recipeEmoji, style: const TextStyle(fontSize: 24)),
+              child: Text(recipe.emoji, style: const TextStyle(fontSize: 24)),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(recipe.recipeTitle ?? '',
+                  Text(recipe.title,
                       style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                  Text(recipe.recipeCreator ?? '', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
-                  Text(recipe.recipeMeta ?? '', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                  Text(recipe.creator, style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                  Text('${recipe.time} · ${recipe.diff}', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                   const Text('View Recipe →', style: TextStyle(color: AppColors.coral, fontSize: 11, fontWeight: FontWeight.w600)),
                 ],
               ),

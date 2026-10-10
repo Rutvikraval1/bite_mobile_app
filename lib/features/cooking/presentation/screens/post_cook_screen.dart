@@ -2,18 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/badge_service.dart';
+import '../../../../core/services/image_upload_service.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/state/app_state.dart';
 import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/glass.dart';
+import '../../../../core/widgets/photo_source_sheet.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../../social/presentation/blocs/social_feed_cubit.dart';
 import '../../domain/cook_session.dart';
 
 /// Post-cook celebration / rate & share flow — ports `PostCookScreen` from
@@ -31,6 +35,8 @@ class _PostCookScreenState extends State<PostCookScreen> {
   int _tipAmount = 5;
   bool _showTipOnPost = true;
   bool _photoUploaded = false;
+  XFile? _photo;
+  bool _sharing = false;
   final TextEditingController _commentController = TextEditingController();
   bool _showAchievement = false;
   bool _hadReview = false;
@@ -287,9 +293,29 @@ class _PostCookScreenState extends State<PostCookScreen> {
     );
   }
 
+  Future<void> _pickPhoto() async {
+    final action = await showPhotoSourceSheet(context, allowRemove: _photo != null);
+    if (action == null || !mounted) return;
+    if (action == PhotoAction.remove) {
+      setState(() {
+        _photo = null;
+        _photoUploaded = false;
+      });
+      return;
+    }
+    final file = await ImageUploadService.instance.pick(
+      action == PhotoAction.camera ? ImageSource.camera : ImageSource.gallery,
+    );
+    if (file == null || !mounted) return;
+    setState(() {
+      _photo = file;
+      _photoUploaded = true;
+    });
+  }
+
   Widget _photoUpload() {
     return GestureDetector(
-      onTap: () => setState(() => _photoUploaded = !_photoUploaded),
+      onTap: _pickPhoto,
       child: Container(
         height: 120,
         width: double.infinity,
@@ -593,8 +619,23 @@ class _PostCookScreenState extends State<PostCookScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: GestureDetector(
-        onTap: () {
+        onTap: () async {
+          if (_sharing) return;
+          setState(() => _sharing = true);
           final comment = _commentController.text.trim();
+          final caption = comment.isNotEmpty ? comment : 'Just cooked this! 🔥';
+          const ratingEmojis = ['', '🫑', '🟠', '🌶'];
+          final rating = _pepperRating;
+          final post = await context.read<SocialFeedCubit>().sharePost(
+                caption: caption,
+                dishTitle: dishTitle,
+                rating: rating != null && rating > 0 && rating < ratingEmojis.length ? ratingEmojis[rating] : null,
+                photo: _photo,
+                recipeId: CookSession.instance.isDrink ? null : CookSession.instance.recipeId,
+              );
+          if (!mounted) return;
+          setState(() => _sharing = false);
+          if (post == null) return;
           final message = comment.isNotEmpty ? '📸 "$comment" — shared to feed!' : '📸 Shared to your feed!';
           var points = 25;
           if (_pepperRating != null) points += 15;
@@ -603,10 +644,11 @@ class _PostCookScreenState extends State<PostCookScreen> {
           final appState = context.read<AppStateCubit>();
           appState.addXp(points);
           appState.setSharedPost(SharedPost(
-            comment: comment.isNotEmpty ? comment : 'Just cooked this! 🔥',
+            comment: caption,
             rating: _pepperRating ?? 0,
-            photo: _photoUploaded ? 'uploaded' : null,
+            photo: post.photoUrl,
             name: dishTitle,
+            points: points,
           ));
           appState.setTrendingMode(false);
           if (comment.isNotEmpty) BadgeService.instance.award(const ['first_share']);
@@ -622,7 +664,13 @@ class _PostCookScreenState extends State<PostCookScreen> {
             boxShadow: const [BoxShadow(color: Color(0x4DFF6B6B), blurRadius: 20)],
           ),
           alignment: Alignment.center,
-          child: const Text('Share to Feed 🌶', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
+          child: _sharing
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Text('Share to Feed 🌶', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
         ),
       ),
     );

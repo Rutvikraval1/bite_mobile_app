@@ -1,24 +1,34 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:intl/intl.dart';
 
+import '../../../../core/constants/tier_definitions.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/state/app_state.dart';
 import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/formatters.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
+import '../../../../core/widgets/app_network_image.dart';
 import '../../../../core/widgets/avatar_img.dart';
 import '../../../../core/widgets/floating_pill_nav.dart';
 import '../../../../core/widgets/glass.dart';
 import '../../../../core/widgets/scrollable_tabs.dart';
 import '../../../../core/widgets/social_proof_avatars.dart';
+import '../../../auth/domain/entities/profile.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
-import '../../data/mock_social_data.dart';
+import '../../../content/domain/entities/bite_card.dart';
+import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../domain/social_models.dart';
 import '../blocs/follow_cubit.dart';
+import '../blocs/social_feed_cubit.dart';
+import '../social_navigation.dart';
 import '../widgets/comment_sheet.dart';
 
 /// Filter/sub-nav pills for the activity wall.
@@ -42,9 +52,41 @@ const List<(String name, int min, String emoji)> _levels = [
   ('b🌶te Legend', 600, '🔥'),
 ];
 
+/// Events category chips → `events.category`.
+const List<(String? id, String label)> _eventCategories = [
+  (null, 'All'),
+  ('tastings', '🍴 Tastings'),
+  ('classes', '👨‍🍳 Classes'),
+  ('competitions', '🏆 Competitions'),
+  ('markets', '🛒 Markets'),
+  ('wine', '🍷 Wine & Spirits'),
+  ('farm', '🌱 Farm Tours'),
+];
+
+/// Card tints for grid cards and photo placeholders.
+const List<Color> _palette = [
+  AppColors.coral,
+  AppColors.amber,
+  AppColors.coralDark,
+  AppColors.drinksBlue,
+  AppColors.cyan,
+  AppColors.placesPurple,
+  Color(0xFF4CAF50),
+  Color(0xFF64B5F6),
+];
+
+Color _tint(String key) => _palette[key.hashCode.abs() % _palette.length];
+
+/// "12m ago" / "Just now".
+String _ago(DateTime at) {
+  final t = Formatters.timeAgo(at);
+  return t == 'now' ? 'Just now' : '$t ago';
+}
+
 /// Main social hub — ports `SocialFeedScreen` from `screens-social.jsx`.
 /// Reachable via the bottom [FloatingPillNav]; renders full-screen leaving
-/// room for it, matching `SwipeDeckScreen`'s pattern.
+/// room for it, matching `SwipeDeckScreen`'s pattern. Data comes from
+/// [SocialFeedCubit] (feed, creators, events) and [ContentCubit] (recipes).
 class SocialFeedScreen extends StatefulWidget {
   const SocialFeedScreen({super.key});
 
@@ -53,28 +95,23 @@ class SocialFeedScreen extends StatefulWidget {
 }
 
 class _SocialFeedScreenState extends State<SocialFeedScreen> {
-  bool _loading = true;
-  Timer? _loadTimer;
   Timer? _bannerTimer;
 
   String _activeFilter = 'feed';
+  String? _eventCategory;
   bool _bannerDismissed = false;
-  final Set<int> _likedPosts = {};
-  int? _commentSheetIndex; // -1 = the user's own shared post
-  final Map<int, List<String>> _postedComments = {};
-  bool _myPostLiked = false;
+  FeedPost? _commentPost;
 
   @override
   void initState() {
     super.initState();
-    _loadTimer = Timer(const Duration(milliseconds: 350), () {
-      if (mounted) setState(() => _loading = false);
-    });
+    // Pick up posts made elsewhere since the tab was last opened.
+    final feed = context.read<SocialFeedCubit>();
+    if (!feed.state.loading) feed.refresh();
   }
 
   @override
   void dispose() {
-    _loadTimer?.cancel();
     _bannerTimer?.cancel();
     super.dispose();
   }
@@ -91,6 +128,13 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
     if (id != 'trending') {
       context.read<AppStateCubit>().setTrendingMode(false);
     }
+    if (id == 'following') {
+      context.read<SocialFeedCubit>().loadFollowing(context.read<FollowCubit>().state);
+    }
+    if (id == 'forYou' || id == 'trending') {
+      // Rankings move with every save, cook, like and swipe.
+      context.read<SocialFeedCubit>().loadDiscover();
+    }
   }
 
   @override
@@ -101,11 +145,13 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
         buildWhen: (p, c) =>
             p.sharedPost != c.sharedPost ||
             p.notificationCount != c.notificationCount ||
-            p.xp != c.xp,
+            p.xp != c.xp ||
+            p.userCuisines != c.userCuisines,
         builder: (context, state) {
           final showBanner = state.sharedPost != null && !_bannerDismissed;
           _startBannerAutoDismiss(showBanner);
           final profile = context.watch<AuthCubit>().state.profile;
+          final feed = context.watch<SocialFeedCubit>().state;
 
           return Stack(
             fit: StackFit.expand,
@@ -114,59 +160,72 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
                 bottom: false,
                 // CustomScrollView + slivers so the (long) activity feed is
                 // built lazily instead of every card at once.
-                child: CustomScrollView(
-                  slivers: [
-                    SliverToBoxAdapter(child: _buildHeader(state)),
-                    if (_loading)
-                      const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 20),
-                          child: _FeedSkeleton(),
-                        ),
-                      )
-                    else ...[
-                      if (showBanner && _activeFilter == 'feed')
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                            child: _PointsBanner(
-                              xp: state.xp,
-                              onDismiss: () => setState(() => _bannerDismissed = true),
+                child: RefreshIndicator(
+                  color: AppColors.coral,
+                  backgroundColor: AppColors.bgCard,
+                  onRefresh: () async {
+                    final cubit = context.read<SocialFeedCubit>();
+                    await Future.wait([cubit.refresh(), cubit.loadDiscover()]);
+                    if (_activeFilter == 'following' && context.mounted) {
+                      await cubit.loadFollowing(context.read<FollowCubit>().state);
+                    }
+                  },
+                  child: CustomScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
+                      SliverToBoxAdapter(child: _buildHeader(state)),
+                      if (feed.loading)
+                        const SliverToBoxAdapter(
+                          child: Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _FeedSkeleton()),
+                        )
+                      else ...[
+                        if (showBanner && _activeFilter == 'feed')
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                              child: _PointsBanner(
+                                xp: state.xp,
+                                earnedPts: state.sharedPost?.points ?? 0,
+                                onDismiss: () => setState(() => _bannerDismissed = true),
+                              ),
                             ),
                           ),
+                        SliverToBoxAdapter(
+                          child: ScrollableTabs(
+                            children: [
+                              for (final f in _filters)
+                                _FilterPill(
+                                  label: f.$2,
+                                  selected: _activeFilter == f.$1,
+                                  onTap: () => _selectFilter(f.$1),
+                                ),
+                            ],
+                          ),
                         ),
-                      SliverToBoxAdapter(
-                        child: ScrollableTabs(
-                          children: [
-                            for (final f in _filters)
-                              _FilterPill(
-                                label: f.$2,
-                                selected: _activeFilter == f.$1,
-                                onTap: () => _selectFilter(f.$1),
-                              ),
-                          ],
-                        ),
-                      ),
-                      _buildTabContent(state, profile),
+                        _buildTabContent(state, feed, profile),
+                      ],
+                      const SliverToBoxAdapter(child: SizedBox(height: 110)),
                     ],
-                    const SliverToBoxAdapter(child: SizedBox(height: 110)),
-                  ],
+                  ),
                 ),
               ),
               Positioned(
                 right: 20,
                 bottom: 90,
-                child: _CreateFab(
-                  onTap: () => context.read<FlowCubit>().setScreen(AppScreen.creatorCreate),
-                ),
+                child: _CreateFab(onTap: () => context.read<FlowCubit>().setScreen(AppScreen.creatorCreate)),
               ),
               const FloatingPillNav(),
-              if (_commentSheetIndex != null)
-                _buildCommentOverlay(state, profile?.avatarEmoji ?? '🧑‍🍳'),
+              if (_commentPost != null)
+                CommentSheet(
+                  post: _commentPost!,
+                  myAvatarEmoji: profile?.avatarEmoji ?? '🧑‍🍳',
+                  onClose: () => setState(() => _commentPost = null),
+                ),
             ],
           );
         },
       ),
+      bottomNavigationBar: const SizedBox(height: 0),
     );
   }
 
@@ -183,8 +242,10 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(title,
-              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800)),
+          Text(
+            title,
+            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+          ),
           GestureDetector(
             onTap: () => context.read<FlowCubit>().setScreen(AppScreen.notifications),
             child: Stack(
@@ -220,15 +281,22 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
   }
 
   /// Returns a sliver.
-  Widget _buildTabContent(AppState state, dynamic profile) {
-    if (_activeFilter == 'feed') return _buildFeedTab(state, profile);
+  Widget _buildTabContent(AppState state, SocialFeedState feed, Profile? profile) {
+    if (_activeFilter == 'feed') return _buildFeedTab(feed, profile);
+    final recipes = context.watch<ContentCubit>().state.recipes;
     return SliverToBoxAdapter(
       child: switch (_activeFilter) {
-        'forYou' => _buildGridTab(mockForYouCards),
-        'trending' => _buildGridTab(mockTrendingCards, trending: true),
-        'following' => _buildFollowingTab(),
-        'creators' => _buildCreatorsTab(),
-        'events' => _buildEventsTab(),
+        'forYou' =>
+          feed.discoverLoaded
+              ? _buildGridTab(_forYouCards(recipes, feed.forYouIds, state.userCuisines))
+              : const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _FeedSkeleton()),
+        'trending' =>
+          feed.discoverLoaded
+              ? _buildGridTab(_trendingCards(recipes, feed.trending), trending: true)
+              : const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _FeedSkeleton()),
+        'following' => _buildFollowingTab(feed),
+        'creators' => _buildCreatorsTab(feed),
+        'events' => _buildEventsTab(feed),
         _ => const SizedBox.shrink(),
       },
     );
@@ -236,70 +304,94 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
 
   // ── FEED TAB ──
 
+  void _openPost(FeedPost post) {
+    final opensRecipe = post.type == 'cooked' || post.type == 'created' || post.type == 'rated';
+    if (opensRecipe && openRecipe(context, post.recipeId)) return;
+    openCreator(context, post.authorHandle);
+  }
+
+  void _openProfileOf(FeedPost post, Profile? profile) {
+    if (post.userId != null && post.userId == profile?.id) {
+      context.read<FlowCubit>().setScreen(AppScreen.profile);
+    } else {
+      openCreator(context, post.authorHandle);
+    }
+  }
+
   /// Returns a sliver — activity cards are built lazily.
-  Widget _buildFeedTab(AppState state, dynamic profile) {
-    final sharedPost = state.sharedPost;
+  Widget _buildFeedTab(SocialFeedState feed, Profile? profile) {
+    final all = feed.visiblePosts;
+    final shared = all.where((p) => p.id == feed.justSharedPostId).firstOrNull;
+    final posts = [
+      for (final p in all)
+        if (p.id != shared?.id) p,
+    ];
+    final hasShared = shared != null;
     final avatarEmoji = profile?.avatarEmoji ?? '🧑‍🍳';
-    final hasShared = sharedPost != null;
+    // "Cooks You Might Like" sits before the 5th card (or after the last).
+    final suggestAt = posts.isEmpty ? -1 : (posts.length > 4 ? 4 : posts.length - 1);
+
+    if (posts.isEmpty && !hasShared) {
+      return SliverToBoxAdapter(
+        child: Column(
+          children: [
+            if (feed.creators.isNotEmpty)
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: _buildSuggestedCreators(feed)),
+            _EmptyBlock(
+              emoji: feed.error != null ? '⚠️' : '🍳',
+              title: feed.error ?? 'No activity yet',
+              message: feed.error != null
+                  ? 'Pull down to try again.'
+                  : 'Cook something and share it to start the feed!',
+            ),
+          ],
+        ),
+      );
+    }
+
     return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       sliver: SliverList.builder(
-        itemCount: mockActivityFeed.length + (hasShared ? 1 : 0),
+        itemCount: posts.length + (hasShared ? 1 : 0),
         itemBuilder: (context, index) {
           if (hasShared && index == 0) {
             return ZoomIn(
               child: _YourPostCard(
                 avatarEmoji: avatarEmoji,
-                avatarUrl: profile?.avatarUrl as String?,
-                sharedPost: sharedPost,
-                liked: _myPostLiked,
-                commentCount: _postedComments[-1]?.length ?? 0,
-                onToggleLike: () => setState(() => _myPostLiked = !_myPostLiked),
-                onComment: () => setState(() => _commentSheetIndex = -1),
+                avatarUrl: profile?.avatarUrl,
+                post: shared,
+                liked: feed.likedPostIds.contains(shared.id),
+                onToggleLike: () => context.read<SocialFeedCubit>().toggleLike(shared.id),
+                onComment: () => setState(() => _commentPost = shared),
                 onShare: () => context.read<FlowCubit>().setScreen(AppScreen.shareSheet),
                 onOpenProfile: () => context.read<FlowCubit>().setScreen(AppScreen.profile),
               ),
             );
           }
           final i = hasShared ? index - 1 : index;
+          final post = posts[i];
           final card = ZoomIn(
-            duration: Duration(milliseconds: 260 + i * 20),
+            duration: Duration(milliseconds: 260 + (i % 12) * 20),
             child: _ActivityCard(
               index: i,
-              activity: mockActivityFeed[i],
-              liked: _likedPosts.contains(i),
-              extraComments: _postedComments[i]?.length ?? 0,
-              onOpen: () {
-                final flow = context.read<FlowCubit>();
-                final type = mockActivityFeed[i].type;
-                if (type == 'text') {
-                  flow.setScreen(AppScreen.creatorProfile);
-                } else if (type == 'cooked' || type == 'created') {
-                  flow.setScreen(AppScreen.recipeDetail);
-                } else {
-                  flow.setScreen(AppScreen.creatorProfile);
-                }
-              },
-              onOpenProfile: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
-              onToggleLike: () => setState(() {
-                if (_likedPosts.contains(i)) {
-                  _likedPosts.remove(i);
-                } else {
-                  _likedPosts.add(i);
-                }
-              }),
-              onComment: () => setState(() => _commentSheetIndex = i),
+              post: post,
+              liked: feed.likedPostIds.contains(post.id),
+              onOpen: () => _openPost(post),
+              onOpenProfile: () => _openProfileOf(post, profile),
+              onToggleLike: () => context.read<SocialFeedCubit>().toggleLike(post.id),
+              onComment: () => setState(() => _commentPost = post),
               onShare: () => context.read<FlowCubit>().setScreen(AppScreen.shareSheet),
             ),
           );
-          if (i != 4) return card;
-          return Column(children: [_buildSuggestedCreators(), card]);
+          if (i != suggestAt) return card;
+          final suggested = _buildSuggestedCreators(feed);
+          return Column(children: i == 4 ? [suggested, card] : [card, suggested]);
         },
       ),
     );
   }
 
-  Widget _buildSuggestedCreators() {
+  Widget _buildSuggestedCreators(SocialFeedState feed) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
@@ -310,35 +402,45 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Cooks You Might Like',
-                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                const Text(
+                  'Cooks You Might Like',
+                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700),
+                ),
                 GestureDetector(
-                  onTap: () => ToastService.instance.show('📋 See all suggestions'),
-                  child: const Text('See All',
-                      style: TextStyle(color: AppColors.coral, fontSize: 12, fontWeight: FontWeight.w600)),
+                  onTap: () => _selectFilter('creators'),
+                  child: const Text(
+                    'See All',
+                    style: TextStyle(color: AppColors.coral, fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ],
             ),
           ),
           SizedBox(
-            height: 172,
+            height: _SuggestedCreatorCard.height,
             // Read follows here, not inside itemBuilder: provider forbids
             // context.select/watch in lazily built list items.
             child: BlocBuilder<FollowCubit, Set<String>>(
-              builder: (context, follows) => ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: mockSuggestedCreators.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 10),
-                itemBuilder: (context, i) {
-                  final user = mockSuggestedCreators[i];
-                  return _SuggestedCreatorCard(
-                    user: user,
-                    followed: follows.contains(FollowCubit.normalize(user.handle)),
-                    onFollow: () => context.read<FollowCubit>().toggle(user.handle),
-                    onOpen: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
-                  );
-                },
-              ),
+              builder: (context, follows) {
+                // Freeze the list per session so tapping Follow keeps the
+                // card (showing ✓) instead of removing it.
+                final users = _suggested ?? feed.suggestedCreators(follows);
+                if (feed.creators.isNotEmpty) _suggested ??= users;
+                return ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: users.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
+                  itemBuilder: (context, i) {
+                    final user = users[i];
+                    return _SuggestedCreatorCard(
+                      user: user,
+                      followed: follows.contains(FollowCubit.normalize(user.handle)),
+                      onFollow: () => context.read<FollowCubit>().toggle(user.handle),
+                      onOpen: () => openCreator(context, user.handle),
+                    );
+                  },
+                );
+              },
             ),
           ),
         ],
@@ -346,9 +448,76 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
     );
   }
 
+  List<Creator>? _suggested;
+
   // ── FOR YOU / TRENDING TAB ──
 
-  Widget _buildGridTab(List<FeedCard> cards, {bool trending = false}) {
+  /// For You: the server's per-user picks ([for_you_recipes]); falls back
+  /// to profile cuisines + saves if the ranking isn't available.
+  List<_GridItem> _forYouCards(List<BiteCard> recipes, List<int> rankedIds, List<String> cuisines) {
+    final byId = {for (final r in recipes) r.id: r};
+    final ranked = [for (final id in rankedIds) ?byId[id]];
+    final wanted = {for (final c in cuisines) c.toLowerCase()};
+    final sorted = ranked.isNotEmpty
+        ? ranked
+        : ([...recipes]..sort((a, b) {
+            final am = wanted.contains(a.cuisine.toLowerCase()) ? 1 : 0;
+            final bm = wanted.contains(b.cuisine.toLowerCase()) ? 1 : 0;
+            if (am != bm) return bm - am;
+            return Formatters.numOf(b.saved).compareTo(Formatters.numOf(a.saved));
+          }));
+    return [
+      for (final (i, r) in sorted.take(4).indexed)
+        _GridItem(recipeId: r.id, title: r.title, user: r.creator, emoji: r.emoji, color: _palette[i % 4], big: i == 0),
+    ];
+  }
+
+  /// Trending: ranked by real engagement this week ([trending_recipes]);
+  /// falls back to all-time hearts if the ranking isn't available.
+  List<_GridItem> _trendingCards(List<BiteCard> recipes, List<TrendingRank> ranking) {
+    final fmt = NumberFormat.decimalPattern();
+    final byId = {for (final r in recipes) r.id: r};
+    final ranked = [
+      for (final t in ranking)
+        if (byId[t.recipeId] case final r?) (r, t),
+    ];
+    if (ranked.isNotEmpty) {
+      return [
+        for (final (i, (r, t)) in ranked.take(4).indexed)
+          _GridItem(
+            recipeId: r.id,
+            title: r.title,
+            user: r.creator,
+            emoji: r.emoji,
+            color: _palette[(i + 1) % 4],
+            big: i == 0 || i == 3,
+            trend: '#${i + 1}',
+            comment: t.heartsWeek > 0
+                ? '${fmt.format(t.heartsWeek)} hearts this week'
+                : '${fmt.format(t.heartsTotal)} hearts',
+          ),
+      ];
+    }
+    final sorted = [...recipes]..sort((a, b) => Formatters.numOf(b.hearts).compareTo(Formatters.numOf(a.hearts)));
+    return [
+      for (final (i, r) in sorted.take(4).indexed)
+        _GridItem(
+          recipeId: r.id,
+          title: r.title,
+          user: r.creator,
+          emoji: r.emoji,
+          color: _palette[(i + 1) % 4],
+          big: i == 0 || i == 3,
+          trend: '#${i + 1}',
+          comment: '${fmt.format(Formatters.numOf(r.hearts).round())} hearts',
+        ),
+    ];
+  }
+
+  Widget _buildGridTab(List<_GridItem> cards, {bool trending = false}) {
+    if (cards.isEmpty) {
+      return const _EmptyBlock(emoji: '🍽', title: 'Nothing here yet', message: 'Recipes will show up here soon.');
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Wrap(
@@ -372,33 +541,41 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
 
   // ── FOLLOWING TAB ──
 
-  Widget _buildFollowingTab() {
-    if (mockFollowingCards.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 60, horizontal: 20),
-        child: Column(
-          children: [
-            Text('👥', style: TextStyle(fontSize: 48)),
-            SizedBox(height: 12),
-            Text('Follow some creators!',
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
-            SizedBox(height: 6),
-            Text('Posts from people you follow will appear here.',
-                style: TextStyle(color: AppColors.muted, fontSize: 13), textAlign: TextAlign.center),
-          ],
-        ),
+  Widget _buildFollowingTab(SocialFeedState feed) {
+    final posts = feed.visibleFollowingPosts;
+    if (posts.isEmpty && feed.followingLoading) {
+      return const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _FeedSkeleton());
+    }
+    if (posts.isEmpty) {
+      return const _EmptyBlock(
+        emoji: '👥',
+        title: 'Follow some creators!',
+        message: 'Posts from people you follow will appear here.',
       );
     }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Column(
         children: [
-          for (var i = 0; i < mockFollowingCards.length; i++)
+          for (var i = 0; i < posts.length; i++)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: ZoomIn(
-                duration: Duration(milliseconds: 240 + i * 40),
-                child: _RecipeGridCard(card: mockFollowingCards[i], height: mockFollowingCards[i].big ? 180 : 140, italicComment: true),
+                duration: Duration(milliseconds: 240 + (i % 10) * 40),
+                child: _RecipeGridCard(
+                  card: _GridItem(
+                    recipeId: posts[i].recipeId,
+                    creatorHandle: posts[i].authorHandle,
+                    title: posts[i].target.isNotEmpty ? posts[i].target : (posts[i].caption ?? ''),
+                    user: posts[i].authorHandle,
+                    emoji: posts[i].creator?.avatarEmoji ?? '🍽',
+                    color: _tint(posts[i].id),
+                    big: i == 0,
+                    comment: '"${posts[i].caption ?? '${posts[i].target} night!'}" — ${_ago(posts[i].createdAt)}',
+                  ),
+                  height: i == 0 ? 180 : 140,
+                  italicComment: true,
+                ),
               ),
             ),
         ],
@@ -408,20 +585,21 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
 
   // ── CREATORS TAB ──
 
-  Widget _buildCreatorsTab() {
+  Widget _buildCreatorsTab(SocialFeedState feed) {
+    final creators = feed.creatorsTab;
+    if (creators.isEmpty) {
+      return const _EmptyBlock(emoji: '🧑‍🍳', title: 'No creators yet', message: 'Creators will show up here soon.');
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Column(
         children: [
-          for (var i = 0; i < mockCreatorCards.length; i++)
+          for (var i = 0; i < creators.length; i++)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: ZoomIn(
-                duration: Duration(milliseconds: 240 + i * 40),
-                child: _CreatorRow(
-                  creator: mockCreatorCards[i],
-                  onTap: () => context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
-                ),
+                duration: Duration(milliseconds: 240 + (i % 10) * 40),
+                child: _CreatorRow(creator: creators[i], onTap: () => openCreator(context, creators[i].handle)),
               ),
             ),
         ],
@@ -431,54 +609,86 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
 
   // ── EVENTS TAB ──
 
-  Widget _buildEventsTab() {
+  Future<void> _toggleRsvp(SocialEvent event) async {
+    final feed = context.read<SocialFeedCubit>();
+    final going = feed.state.rsvps.contains(event.id);
+    if (!going && event.soldOut) {
+      ToastService.instance.show('😞 This event is sold out. Join the waitlist?');
+      return;
+    }
+    final result = await feed.toggleRsvp(event);
+    if (result == null) return;
+    ToastService.instance.show(result ? '🎟 RSVP confirmed for ${event.title}!' : 'RSVP cancelled for ${event.title}');
+  }
+
+  void _shareEvent(SocialEvent event) {
+    Clipboard.setData(ClipboardData(text: '${event.title} — ${_eventDate(event)} @ ${event.venue} on b🌶te'));
+    ToastService.instance.show('📤 Share link copied!');
+  }
+
+  Widget _buildEventsTab(SocialFeedState feed) {
+    final featured = feed.featuredEvent;
+    final events = [
+      for (final e in feed.otherEvents)
+        if (_eventCategory == null || e.category == _eventCategory) e,
+    ];
+    List<String> avatarsFor(SocialEvent e) => [...?feed.attendeeAvatars[e.id], ...e.sampleAvatars].take(4).toList();
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Column(
         children: [
-          const _FeaturedEventCard(),
-          const SizedBox(height: 16),
+          if (featured != null) ...[
+            _FeaturedEventCard(
+              event: featured,
+              going: feed.rsvps.contains(featured.id),
+              avatars: avatarsFor(featured),
+              onRsvp: () => _toggleRsvp(featured),
+              onShare: () => _shareEvent(featured),
+            ),
+            const SizedBox(height: 16),
+          ],
           ScrollableTabs(
             leftPad: 0,
             children: [
-              for (final (i, cat) in [
-                'All',
-                '🍴 Tastings',
-                '👨‍🍳 Classes',
-                '🏆 Competitions',
-                '🛒 Markets',
-                '🍷 Wine & Spirits',
-                '🌱 Farm Tours',
-              ].indexed)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: i == 0 ? AppColors.coral : Colors.white.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(100),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(cat,
+              for (final cat in _eventCategories)
+                GestureDetector(
+                  onTap: () => setState(() => _eventCategory = cat.$1),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _eventCategory == cat.$1 ? AppColors.coral : Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(100),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      cat.$2,
                       style: TextStyle(
-                          color: i == 0 ? Colors.white : AppColors.muted,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600)),
+                        color: _eventCategory == cat.$1 ? Colors.white : AppColors.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 ),
             ],
           ),
-          for (var i = 0; i < mockEvents.length; i++)
+          if (events.isEmpty)
+            const _EmptyBlock(
+              emoji: '🎪',
+              title: 'No events here yet',
+              message: 'Check back soon for local food events.',
+            ),
+          for (var i = 0; i < events.length; i++)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: ZoomIn(
                 duration: Duration(milliseconds: 240 + i * 40),
                 child: _EventRow(
-                  event: mockEvents[i],
-                  onTap: () {
-                    if (mockEvents[i].soldOut) {
-                      ToastService.instance.show('😞 This event is sold out. Join the waitlist?');
-                    } else {
-                      ToastService.instance.show('🎟 RSVP confirmed for ${mockEvents[i].title}!');
-                    }
-                  },
+                  event: events[i],
+                  going: feed.rsvps.contains(events[i].id),
+                  avatars: avatarsFor(events[i]).take(3).toList(),
+                  onTap: () => _toggleRsvp(events[i]),
                 ),
               ),
             ),
@@ -509,10 +719,14 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Host an Event',
-                              style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
-                          Text('Cooking class, tasting, pop-up, or competition',
-                              style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                          Text(
+                            'Host an Event',
+                            style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                          ),
+                          Text(
+                            'Cooking class, tasting, pop-up, or competition',
+                            style: TextStyle(color: AppColors.muted, fontSize: 11),
+                          ),
                         ],
                       ),
                     ),
@@ -525,14 +739,85 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
       ),
     );
   }
+}
 
-  Widget _buildCommentOverlay(AppState state, String avatarEmoji) {
-    final idx = _commentSheetIndex!;
-    return CommentSheet(
-      myAvatarEmoji: avatarEmoji,
-      initialUserComments: _postedComments[idx] ?? const [],
-      onClose: () => setState(() => _commentSheetIndex = null),
-      onPosted: (comments) => setState(() => _postedComments[idx] = comments),
+/// "Mar 12 · 6 PM" / "Mar 14 · 7:30 PM".
+String _eventDate(SocialEvent e) {
+  final t = e.startsAt;
+  return '${DateFormat('MMM d').format(t)} · ${DateFormat(t.minute == 0 ? 'h a' : 'h:mm a').format(t)}';
+}
+
+/// "This Saturday · 11 AM – 3 PM" for the featured card.
+String _featuredDate(SocialEvent e) {
+  final t = e.startsAt;
+  final today = DateUtils.dateOnly(DateTime.now());
+  final days = DateUtils.dateOnly(t).difference(today).inDays;
+  final day = switch (days) {
+    0 => 'Today',
+    1 => 'Tomorrow',
+    > 1 && < 7 => 'This ${DateFormat('EEEE').format(t)}',
+    _ => DateFormat('MMM d').format(t),
+  };
+  String time(DateTime d) => DateFormat(d.minute == 0 ? 'h a' : 'h:mm a').format(d);
+  final end = e.endsAt;
+  return end == null ? '$day · ${time(t)}' : '$day · ${time(t)} – ${time(end)}';
+}
+
+/// A recipe-style card for the For You / Trending / Following tabs.
+class _GridItem {
+  const _GridItem({
+    required this.title,
+    required this.user,
+    required this.emoji,
+    required this.color,
+    this.recipeId,
+    this.creatorHandle,
+    this.big = false,
+    this.trend,
+    this.comment,
+  });
+
+  final int? recipeId;
+
+  /// Opened when there's no recipe to show.
+  final String? creatorHandle;
+  final String title;
+  final String user;
+  final String emoji;
+  final Color color;
+  final bool big;
+  final String? trend;
+  final String? comment;
+}
+
+class _EmptyBlock extends StatelessWidget {
+  const _EmptyBlock({required this.emoji, required this.title, required this.message});
+
+  final String emoji;
+  final String title;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 20),
+      child: Column(
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 48)),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            message,
+            style: const TextStyle(color: AppColors.muted, fontSize: 13),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -550,19 +835,23 @@ class _FilterPill extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.coral : Colors.white.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(100),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? Colors.white : AppColors.muted,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-            fontSize: 13,
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: selected ? AppColors.coral : Colors.white.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(100),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : AppColors.muted,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              fontSize: 13,
+            ),
           ),
         ),
       ),
@@ -571,9 +860,10 @@ class _FilterPill extends StatelessWidget {
 }
 
 class _PointsBanner extends StatelessWidget {
-  const _PointsBanner({required this.xp, required this.onDismiss});
+  const _PointsBanner({required this.xp, required this.earnedPts, required this.onDismiss});
 
   final int xp;
+  final int earnedPts;
   final VoidCallback onDismiss;
 
   @override
@@ -585,7 +875,6 @@ class _PointsBanner extends StatelessWidget {
     final nextIndex = _levels.indexOf(current) + 1;
     final next = nextIndex < _levels.length ? _levels[nextIndex] : current;
     final progress = next == current ? 1.0 : ((xp - current.$2) / (next.$2 - current.$2)).clamp(0.0, 1.0);
-    const earnedPts = 65;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -610,10 +899,14 @@ class _PointsBanner extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('+$earnedPts points earned!',
-                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-                    const Text('Cook +10 · Rate +5 · Photo +5 · Review +3 · Share +5',
-                        style: TextStyle(color: AppColors.muted, fontSize: 12)),
+                    Text(
+                      '+$earnedPts points earned!',
+                      style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                    ),
+                    const Text(
+                      'Cook +10 · Rate +5 · Photo +5 · Review +3 · Share +5',
+                      style: TextStyle(color: AppColors.muted, fontSize: 12),
+                    ),
                   ],
                 ),
               ),
@@ -638,8 +931,10 @@ class _PointsBanner extends StatelessWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(current.$1,
-                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                        Text(
+                          current.$1,
+                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
                         Text('$xp/${next.$2} pts', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                       ],
                     ),
@@ -670,9 +965,8 @@ class _YourPostCard extends StatelessWidget {
   const _YourPostCard({
     required this.avatarEmoji,
     this.avatarUrl,
-    required this.sharedPost,
+    required this.post,
     required this.liked,
-    required this.commentCount,
     required this.onToggleLike,
     required this.onComment,
     required this.onShare,
@@ -681,9 +975,8 @@ class _YourPostCard extends StatelessWidget {
 
   final String avatarEmoji;
   final String? avatarUrl;
-  final SharedPost sharedPost;
+  final FeedPost post;
   final bool liked;
-  final int commentCount;
   final VoidCallback onToggleLike;
   final VoidCallback onComment;
   final VoidCallback onShare;
@@ -691,8 +984,9 @@ class _YourPostCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const ratingLabels = ['', 'Good 🫑', 'Great 🟠', 'Fire 🌶'];
-    const ratingEmojis = ['', '🫑', '🟠', '🌶'];
+    const ratingLabels = {'🫑': 'Good 🫑', '🟠': 'Great 🟠', '🌶': 'Fire 🌶'};
+    final rating = post.rating;
+    final recipe = context.read<ContentCubit>().state.findCard(post.recipeId ?? -1);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -711,8 +1005,10 @@ class _YourPostCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(100),
               border: Border.all(color: AppColors.coral.withValues(alpha: 0.25)),
             ),
-            child: const Text('🆕 YOUR POST',
-                style: TextStyle(color: AppColors.coral, fontSize: 10, fontWeight: FontWeight.w700)),
+            child: const Text(
+              '🆕 YOUR POST',
+              style: TextStyle(color: AppColors.coral, fontSize: 10, fontWeight: FontWeight.w700),
+            ),
           ),
           const SizedBox(height: 8),
           Row(
@@ -740,55 +1036,69 @@ class _YourPostCard extends StatelessWidget {
                   children: [
                     GestureDetector(
                       onTap: onOpenProfile,
-                      child: const Text('You',
-                          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                      child: const Text(
+                        'You',
+                        style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700),
+                      ),
                     ),
-                    const Text('Just now', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                    Text(_ago(post.createdAt), style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                   ],
                 ),
               ),
-              if (sharedPost.rating > 0) Text(ratingEmojis[sharedPost.rating], style: const TextStyle(fontSize: 16)),
+              if (rating != null) Text(rating, style: const TextStyle(fontSize: 16)),
             ],
           ),
-          if (sharedPost.photo != null) ...[
+          if (post.hasPhoto) ...[
             const SizedBox(height: 10),
             Container(
               height: 140,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
                 gradient: LinearGradient(
-                    colors: [AppColors.coral.withValues(alpha: 0.2), AppColors.amber.withValues(alpha: 0.13)]),
+                  colors: [AppColors.coral.withValues(alpha: 0.2), AppColors.amber.withValues(alpha: 0.13)],
+                ),
               ),
+              clipBehavior: Clip.antiAlias,
               alignment: Alignment.center,
-              child: const Opacity(opacity: 0.4, child: Text('📸', style: TextStyle(fontSize: 40))),
+              child: post.photoUrl != null
+                  ? AppNetworkImage(
+                      post.photoUrl!,
+                      width: double.infinity,
+                      height: 140,
+                      errorBuilder: (_) =>
+                          const Opacity(opacity: 0.4, child: Text('📸', style: TextStyle(fontSize: 40))),
+                    )
+                  : const Opacity(opacity: 0.4, child: Text('📸', style: TextStyle(fontSize: 40))),
             ),
           ],
           const SizedBox(height: 10),
-          Text(sharedPost.comment, style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5)),
+          Text(post.caption ?? '', style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5)),
           const SizedBox(height: 8),
           Text(
-            '${sharedPost.emoji} ${sharedPost.name.isEmpty ? 'Gochujang Glazed Fried Chicken' : sharedPost.name}'
-            '${sharedPost.rating > 0 ? ' · ${ratingLabels[sharedPost.rating]}' : ''}',
+            '${recipe?.emoji ?? '🍽'} ${post.target}'
+            '${rating != null && ratingLabels[rating] != null ? ' · ${ratingLabels[rating]}' : ''}',
             style: const TextStyle(color: AppColors.muted, fontSize: 12),
           ),
           Padding(
             padding: const EdgeInsets.only(top: 10),
             child: DecoratedBox(
-              decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0x0FFFFFFF)))),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Color(0x0FFFFFFF))),
+              ),
               child: Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: Row(
                   children: [
                     _EngagementButton(
                       icon: liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                      label: '${liked ? 2 : 1}',
+                      label: '${post.likesCount}',
                       color: liked ? AppColors.coral : AppColors.muted,
                       onTap: onToggleLike,
                     ),
                     const SizedBox(width: 12),
                     _EngagementButton(
                       icon: Icons.chat_bubble_outline_rounded,
-                      label: '$commentCount',
+                      label: '${post.commentsCount}',
                       color: AppColors.muted,
                       onTap: onComment,
                     ),
@@ -813,9 +1123,8 @@ class _YourPostCard extends StatelessWidget {
 class _ActivityCard extends StatelessWidget {
   const _ActivityCard({
     required this.index,
-    required this.activity,
+    required this.post,
     required this.liked,
-    required this.extraComments,
     required this.onOpen,
     required this.onOpenProfile,
     required this.onToggleLike,
@@ -824,9 +1133,8 @@ class _ActivityCard extends StatelessWidget {
   });
 
   final int index;
-  final FeedActivity activity;
+  final FeedPost post;
   final bool liked;
-  final int extraComments;
   final VoidCallback onOpen;
   final VoidCallback onOpenProfile;
   final VoidCallback onToggleLike;
@@ -835,17 +1143,13 @@ class _ActivityCard extends StatelessWidget {
 
   static const _photoHeights = [160.0, 120.0, 180.0, 140.0, 200.0, 130.0];
 
-  String get _tierBadgeEmoji {
-    if (activity.tierColor == const Color(0xFF9C27B0)) return '⭐';
-    if (activity.tierColor == AppColors.amber) return '👨‍🍳';
-    if (activity.tierColor == AppColors.coral) return '🍳';
-    if (activity.tierColor == AppColors.placesPurple) return '🧑‍🍳';
-    return '🥄';
-  }
-
   @override
   Widget build(BuildContext context) {
-    final isText = activity.type == 'text';
+    final tier = TierDefinitions.tierFor(post.creator?.xp ?? 0);
+    final avatarEmoji = post.creator?.avatarEmoji ?? '🧑‍🍳';
+    final avatarUrl = post.creator?.avatarUrl;
+    final photoColor = _tint(post.id);
+    final isText = post.type == 'text';
     final indent = isText ? 0.0 : 46.0;
     return GestureDetector(
       onTap: onOpen,
@@ -874,11 +1178,12 @@ class _ActivityCard extends StatelessWidget {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           gradient: LinearGradient(
-                              colors: [AppColors.coral.withValues(alpha: 0.27), AppColors.amber.withValues(alpha: 0.27)]),
-                          border: Border.all(color: activity.tierColor.withValues(alpha: 0.4), width: 2),
+                            colors: [AppColors.coral.withValues(alpha: 0.27), AppColors.amber.withValues(alpha: 0.27)],
+                          ),
+                          border: Border.all(color: tier.color.withValues(alpha: 0.4), width: 2),
                         ),
                         clipBehavior: Clip.antiAlias,
-                        child: AvatarImg(emoji: activity.avatarEmoji, imageUrl: activity.avatarUrl, size: 32, borderWidth: 0),
+                        child: AvatarImg(emoji: avatarEmoji, imageUrl: avatarUrl, size: 32, borderWidth: 0),
                       ),
                       Positioned(
                         bottom: -2,
@@ -888,11 +1193,11 @@ class _ActivityCard extends StatelessWidget {
                           height: 12,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: activity.tierColor,
+                            color: tier.color,
                             border: Border.all(color: AppColors.bgDark, width: 1.5),
                           ),
                           alignment: Alignment.center,
-                          child: Text(_tierBadgeEmoji, style: const TextStyle(fontSize: 6)),
+                          child: Text(tier.emoji, style: const TextStyle(fontSize: 6)),
                         ),
                       ),
                     ],
@@ -910,30 +1215,35 @@ class _ActivityCard extends StatelessWidget {
                             style: const TextStyle(fontSize: 13, height: 1.4),
                             children: [
                               TextSpan(
-                                  text: activity.user,
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                text: post.authorHandle,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                              ),
                               if (!isText) ...[
-                                TextSpan(text: ' ${activity.action} ', style: const TextStyle(color: AppColors.muted)),
                                 TextSpan(
-                                    text: activity.target,
-                                    style: const TextStyle(color: AppColors.coral, fontWeight: FontWeight.w600)),
-                                if (activity.rating != null) TextSpan(text: ' ${activity.rating}'),
+                                  text: ' ${post.action} ',
+                                  style: const TextStyle(color: AppColors.muted),
+                                ),
+                                TextSpan(
+                                  text: post.target,
+                                  style: const TextStyle(color: AppColors.coral, fontWeight: FontWeight.w600),
+                                ),
+                                if (post.rating != null) TextSpan(text: ' ${post.rating}'),
                               ],
                             ],
                           ),
                         ),
                       ),
-                      Text('${activity.time} ago', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                      Text(_ago(post.createdAt), style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                     ],
                   ),
                 ),
               ],
             ),
-            if (activity.caption != null)
+            if (post.caption != null)
               Padding(
                 padding: EdgeInsets.only(left: indent, top: isText ? 8 : 8, bottom: isText ? 4 : 8),
                 child: Text(
-                  activity.caption!,
+                  post.caption!,
                   style: TextStyle(
                     color: isText ? Colors.white.withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.7),
                     fontSize: isText ? 15 : 13,
@@ -942,27 +1252,37 @@ class _ActivityCard extends StatelessWidget {
                   ),
                 ),
               ),
-            if (activity.hasPhoto)
+            if (post.hasPhoto)
               Padding(
                 padding: EdgeInsets.only(left: indent, bottom: 8),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     height: _photoHeights[index % _photoHeights.length],
-                    color: activity.photoColor.withValues(alpha: 0.13),
+                    color: photoColor.withValues(alpha: 0.13),
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        if (activity.avatarUrl != null)
+                        if (post.photoUrl != null)
+                          AppNetworkImage(
+                            post.photoUrl!,
+                            errorBuilder: (_) => Center(
+                              child: Opacity(
+                                opacity: 0.4,
+                                child: Text(avatarEmoji, style: const TextStyle(fontSize: 36)),
+                              ),
+                            ),
+                          )
+                        else if (avatarUrl != null)
                           Opacity(
                             opacity: 0.6,
-                            child: AvatarImg(emoji: activity.avatarEmoji, imageUrl: activity.avatarUrl, size: 999, borderWidth: 0),
+                            child: AvatarImg(emoji: avatarEmoji, imageUrl: avatarUrl, size: 999, borderWidth: 0),
                           )
                         else
                           Center(
                             child: Opacity(
                               opacity: 0.4,
-                              child: Text(activity.avatarEmoji, style: const TextStyle(fontSize: 36)),
+                              child: Text(avatarEmoji, style: const TextStyle(fontSize: 36)),
                             ),
                           ),
                       ],
@@ -976,19 +1296,24 @@ class _ActivityCard extends StatelessWidget {
                 children: [
                   _EngagementButton(
                     icon: liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-                    label: '${activity.likes + (liked ? 1 : 0)}',
+                    label: '${post.likesCount}',
                     color: liked ? AppColors.coral : AppColors.muted,
                     onTap: onToggleLike,
                   ),
                   const SizedBox(width: 12),
                   _EngagementButton(
                     icon: Icons.chat_bubble_outline_rounded,
-                    label: '${activity.comments + extraComments}',
+                    label: '${post.commentsCount}',
                     color: AppColors.muted,
                     onTap: onComment,
                   ),
                   const SizedBox(width: 12),
-                  _EngagementButton(icon: Icons.ios_share_rounded, label: 'Share', color: AppColors.muted, onTap: onShare),
+                  _EngagementButton(
+                    icon: Icons.ios_share_rounded,
+                    label: 'Share',
+                    color: AppColors.muted,
+                    onTap: onShare,
+                  ),
                 ],
               ),
             ),
@@ -1035,103 +1360,132 @@ class _SuggestedCreatorCard extends StatelessWidget {
     required this.onOpen,
   });
 
-  final SuggestedCreator user;
+  final Creator user;
   final bool followed;
   final VoidCallback onFollow;
   final VoidCallback onOpen;
 
+  /// Fits avatar + 2 text lines + pill + buttons, with room for emoji
+  /// (taller line height) in the handle / reason pill.
+  static const double height = 188;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Column(
-        children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                  colors: [AppColors.coral.withValues(alpha: 0.27), AppColors.amber.withValues(alpha: 0.27)]),
-              border: Border.all(color: AppColors.coral.withValues(alpha: 0.33)),
+    // Large system font sizes would overflow the fixed-height card.
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.15,
+      child: Container(
+        width: 150,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [AppColors.coral.withValues(alpha: 0.27), AppColors.amber.withValues(alpha: 0.27)],
+                ),
+                border: Border.all(color: AppColors.coral.withValues(alpha: 0.33)),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: AvatarImg(emoji: user.avatarEmoji, imageUrl: user.avatarUrl, size: 48, borderWidth: 0),
             ),
-            clipBehavior: Clip.antiAlias,
-            child: AvatarImg(emoji: user.avatarEmoji, imageUrl: user.avatarUrl, size: 48, borderWidth: 0),
-          ),
-          const SizedBox(height: 8),
-          Text(user.handle,
+            const SizedBox(height: 8),
+            Text(
+              user.handle,
               style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
               maxLines: 1,
-              overflow: TextOverflow.ellipsis),
-          Text('${user.recipes} recipes · ${user.followers}',
-              style: const TextStyle(color: AppColors.muted, fontSize: 10)),
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: AppColors.cyan.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.circular(100),
-              border: Border.all(color: AppColors.cyan.withValues(alpha: 0.13)),
+              overflow: TextOverflow.ellipsis,
             ),
-            child: Text(user.reason,
+            Text(
+              '${user.recipes} recipes · ${Formatters.compact(user.followers)}',
+              style: const TextStyle(color: AppColors.muted, fontSize: 10),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.cyan.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(100),
+                border: Border.all(color: AppColors.cyan.withValues(alpha: 0.13)),
+              ),
+              child: Text(
+                user.reason.isNotEmpty
+                    ? user.reason
+                    : (user.specialties.isNotEmpty ? user.specialties.first : 'New on b🌶te'),
                 style: const TextStyle(color: AppColors.cyan, fontSize: 9, fontWeight: FontWeight.w600),
                 maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: onFollow,
-                  child: Container(
-                    height: 30,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: followed ? const Color(0x1F4CAF50) : AppColors.coral,
-                      borderRadius: BorderRadius.circular(100),
-                      border: followed ? Border.all(color: const Color(0x4D4CAF50)) : null,
-                    ),
-                    child: Text(followed ? '✓' : 'Follow',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            // Buttons sit at the bottom so every card lines up.
+            const Spacer(),
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: onFollow,
+                    child: Container(
+                      height: 30,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: followed ? const Color(0x1F4CAF50) : AppColors.coral,
+                        borderRadius: BorderRadius.circular(100),
+                        border: followed ? Border.all(color: const Color(0x4D4CAF50)) : null,
+                      ),
+                      child: Text(
+                        followed ? '✓' : 'Follow',
                         style: TextStyle(
-                            color: followed ? const Color(0xFF4CAF50) : Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700)),
+                          color: followed ? const Color(0xFF4CAF50) : Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              GestureDetector(
-                onTap: onOpen,
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.04),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: onOpen,
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.04),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    ),
+                    child: const Icon(Icons.chevron_right_rounded, size: 12, color: AppColors.muted),
                   ),
-                  child: const Icon(Icons.chevron_right_rounded, size: 12, color: AppColors.muted),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class _RecipeGridCard extends StatelessWidget {
-  const _RecipeGridCard({required this.card, this.trending = false, this.rank = false, this.height, this.italicComment = false});
+  const _RecipeGridCard({
+    required this.card,
+    this.trending = false,
+    this.rank = false,
+    this.height,
+    this.italicComment = false,
+  });
 
-  final FeedCard card;
+  final _GridItem card;
   final bool trending;
   final bool rank;
   final double? height;
@@ -1176,8 +1530,10 @@ class _RecipeGridCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(100),
                   border: Border.all(color: AppColors.amber.withValues(alpha: 0.27)),
                 ),
-                child: Text(card.trend!,
-                    style: const TextStyle(color: AppColors.amber, fontSize: 11, fontWeight: FontWeight.w800)),
+                child: Text(
+                  card.trend!,
+                  style: const TextStyle(color: AppColors.amber, fontSize: 11, fontWeight: FontWeight.w800),
+                ),
               ),
             ),
           Positioned(
@@ -1187,10 +1543,12 @@ class _RecipeGridCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(card.title,
-                    style: TextStyle(color: Colors.white, fontSize: card.big ? 18 : 14, fontWeight: FontWeight.w700),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis),
+                Text(
+                  card.title,
+                  style: TextStyle(color: Colors.white, fontSize: card.big ? 18 : 14, fontWeight: FontWeight.w700),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 Text(card.user, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
                 if (card.comment != null)
                   Padding(
@@ -1213,10 +1571,16 @@ class _RecipeGridCard extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: GestureDetector(
-        onTap: () => context.read<FlowCubit>().setScreen(AppScreen.recipeDetail),
-        child: rank
-            ? Pulse(amount: 0.015, duration: const Duration(milliseconds: 2400), child: content)
-            : content,
+        onTap: () {
+          if (openRecipe(context, card.recipeId)) return;
+          final handle = card.creatorHandle;
+          if (handle != null) {
+            openCreator(context, handle);
+          } else {
+            ToastService.instance.show('This recipe is no longer available');
+          }
+        },
+        child: rank ? Pulse(amount: 0.015, duration: const Duration(milliseconds: 2400), child: content) : content,
       ),
     );
   }
@@ -1225,11 +1589,13 @@ class _RecipeGridCard extends StatelessWidget {
 class _CreatorRow extends StatelessWidget {
   const _CreatorRow({required this.creator, required this.onTap});
 
-  final CreatorCard creator;
+  final Creator creator;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final tier = TierDefinitions.tierFor(creator.xp);
+    final badge = creator.badge.isNotEmpty ? creator.badge : '${tier.emoji} ${tier.name}';
     return Glass(
       onTap: onTap,
       borderRadius: 16,
@@ -1245,18 +1611,23 @@ class _CreatorRow extends StatelessWidget {
               border: Border.all(color: AppColors.coral.withValues(alpha: 0.27)),
             ),
             clipBehavior: Clip.antiAlias,
-            child: AvatarImg(emoji: creator.emoji, imageUrl: creator.avatarUrl, size: 48, borderWidth: 0),
+            child: AvatarImg(emoji: creator.avatarEmoji, imageUrl: creator.avatarUrl, size: 48, borderWidth: 0),
           ),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(creator.name, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                Text(
+                  creator.name,
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                ),
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Text('${creator.handle} · ${creator.recipes} recipes',
-                      style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                  child: Text(
+                    '${creator.handle} · ${creator.recipes} recipes',
+                    style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                  ),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -1265,8 +1636,10 @@ class _CreatorRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(100),
                     border: Border.all(color: AppColors.amber.withValues(alpha: 0.2)),
                   ),
-                  child: Text(creator.badge,
-                      style: const TextStyle(color: AppColors.amber, fontSize: 10, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    badge,
+                    style: const TextStyle(color: AppColors.amber, fontSize: 10, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ],
             ),
@@ -1274,7 +1647,10 @@ class _CreatorRow extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(creator.followers, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+              Text(
+                Formatters.compact(creator.followers),
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700),
+              ),
               const Text('followers', style: TextStyle(color: AppColors.muted, fontSize: 10)),
             ],
           ),
@@ -1285,7 +1661,19 @@ class _CreatorRow extends StatelessWidget {
 }
 
 class _FeaturedEventCard extends StatelessWidget {
-  const _FeaturedEventCard();
+  const _FeaturedEventCard({
+    required this.event,
+    required this.going,
+    required this.avatars,
+    required this.onRsvp,
+    required this.onShare,
+  });
+
+  final SocialEvent event;
+  final bool going;
+  final List<String> avatars;
+  final VoidCallback onRsvp;
+  final VoidCallback onShare;
 
   @override
   Widget build(BuildContext context) {
@@ -1302,22 +1690,32 @@ class _FeaturedEventCard extends StatelessWidget {
             height: 160,
             width: double.infinity,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [
-                AppColors.coral.withValues(alpha: 0.2),
-                AppColors.amber.withValues(alpha: 0.13),
-                AppColors.coral.withValues(alpha: 0.07),
-              ]),
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.coral.withValues(alpha: 0.2),
+                  AppColors.amber.withValues(alpha: 0.13),
+                  AppColors.coral.withValues(alpha: 0.07),
+                ],
+              ),
             ),
             child: Stack(
               children: [
-                const Center(child: Opacity(opacity: 0.3, child: Text('🎪', style: TextStyle(fontSize: 56)))),
+                Center(
+                  child: Opacity(opacity: 0.3, child: Text(event.emoji, style: const TextStyle(fontSize: 56))),
+                ),
                 Positioned(
                   top: 10,
                   left: 12,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(color: AppColors.coral.withValues(alpha: 0.87), borderRadius: BorderRadius.circular(100)),
-                    child: const Text('FEATURED', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800)),
+                    decoration: BoxDecoration(
+                      color: AppColors.coral.withValues(alpha: 0.87),
+                      borderRadius: BorderRadius.circular(100),
+                    ),
+                    child: const Text(
+                      'FEATURED',
+                      style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
+                    ),
                   ),
                 ),
                 Positioned(
@@ -1325,8 +1723,14 @@ class _FeaturedEventCard extends StatelessWidget {
                   right: 12,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(100)),
-                    child: const Text('📍 2.4 mi', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600)),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(100),
+                    ),
+                    child: Text(
+                      '📍 ${event.distance}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
               ],
@@ -1337,28 +1741,29 @@ class _FeaturedEventCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
+                Row(
                   children: [
-                    Icon(Icons.event_available_rounded, size: 14, color: AppColors.amber),
-                    SizedBox(width: 8),
-                    Text('This Saturday · 11 AM – 3 PM',
-                        style: TextStyle(color: AppColors.amber, fontSize: 11, fontWeight: FontWeight.w700)),
+                    const Icon(Icons.event_available_rounded, size: 14, color: AppColors.amber),
+                    const SizedBox(width: 8),
+                    Text(
+                      _featuredDate(event),
+                      style: const TextStyle(color: AppColors.amber, fontSize: 11, fontWeight: FontWeight.w700),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 6),
-                const Text('Downtown Farmers Market & Food Fest',
-                    style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 4),
-                const Text(
-                  '50+ local vendors, live cooking demos, tastings from top b🌶te creators, and a kids cooking workshop.',
-                  style: TextStyle(color: AppColors.muted, fontSize: 12, height: 1.5),
+                Text(
+                  event.title,
+                  style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800),
                 ),
+                const SizedBox(height: 4),
+                Text(event.description, style: const TextStyle(color: AppColors.muted, fontSize: 12, height: 1.5)),
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
                       child: GestureDetector(
-                        onTap: () => ToastService.instance.show('🎟 RSVP confirmed! Added to your calendar.'),
+                        onTap: onRsvp,
                         child: Container(
                           height: 40,
                           alignment: Alignment.center,
@@ -1366,14 +1771,18 @@ class _FeaturedEventCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(100),
                             gradient: const LinearGradient(colors: [AppColors.coral, AppColors.amber]),
                           ),
-                          child: const Text('RSVP Free 🎟',
-                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+                          child: Text(
+                            going
+                                ? '✓ Going'
+                                : (event.price.toLowerCase().startsWith('free') ? 'RSVP Free 🎟' : 'RSVP 🎟'),
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
+                          ),
                         ),
                       ),
                     ),
                     const SizedBox(width: 8),
                     GestureDetector(
-                      onTap: () => ToastService.instance.show('📤 Share link copied!'),
+                      onTap: onShare,
                       child: Container(
                         width: 40,
                         height: 40,
@@ -1391,17 +1800,15 @@ class _FeaturedEventCard extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 10),
                   child: Row(
                     children: [
-                      SocialProofAvatars(
-                        urls: [
-                          SocialAvatars.urlFor('@chefpriya') ?? '',
-                          SocialAvatars.urlFor('@sarah_bakes') ?? '',
-                          SocialAvatars.urlFor('@marco.eats') ?? '',
-                          SocialAvatars.urlFor('@bangkokbites') ?? '',
-                        ],
-                        count: 4,
+                      if (avatars.isNotEmpty) ...[
+                        SocialProofAvatars(urls: avatars, count: avatars.length),
+                        const SizedBox(width: 6),
+                      ],
+                      Text(
+                        '${event.attending} going'
+                        '${event.interested > 0 ? ' · ${event.interested} interested' : ''}',
+                        style: const TextStyle(color: AppColors.muted, fontSize: 11),
                       ),
-                      const SizedBox(width: 6),
-                      const Text('234 going · 89 interested', style: TextStyle(color: AppColors.muted, fontSize: 11)),
                     ],
                   ),
                 ),
@@ -1415,9 +1822,11 @@ class _FeaturedEventCard extends StatelessWidget {
 }
 
 class _EventRow extends StatelessWidget {
-  const _EventRow({required this.event, required this.onTap});
+  const _EventRow({required this.event, required this.going, required this.avatars, required this.onTap});
 
-  final LocalEvent event;
+  final SocialEvent event;
+  final bool going;
+  final List<String> avatars;
   final VoidCallback onTap;
 
   @override
@@ -1448,50 +1857,66 @@ class _EventRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(event.title, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                  Text(
+                    event.title,
+                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Text('📍 ${event.venue} · ${event.distance}',
-                        style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                    child: Text(
+                      '📍 ${event.venue} · ${event.distance}',
+                      style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                    ),
                   ),
                   Wrap(
                     crossAxisAlignment: WrapCrossAlignment.center,
                     spacing: 8,
                     children: [
-                      Text('📅 ${event.date}', style: TextStyle(color: event.color, fontSize: 11, fontWeight: FontWeight.w600)),
+                      Text(
+                        '📅 ${_eventDate(event)}',
+                        style: TextStyle(color: event.color, fontSize: 11, fontWeight: FontWeight.w600),
+                      ),
                       const Text('·', style: TextStyle(color: AppColors.muted, fontSize: 10)),
-                      Text(event.price, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                      Text(
+                        event.price,
+                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                      ),
                     ],
                   ),
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Row(
                       children: [
-                        SocialProofAvatars(
-                          urls: [
-                            SocialAvatars.urlFor('@chefpriya') ?? '',
-                            SocialAvatars.urlFor('@marco.eats') ?? '',
-                            SocialAvatars.urlFor('@sarah_bakes') ?? '',
-                          ],
-                          count: 3,
-                          size: 16,
+                        if (avatars.isNotEmpty) ...[
+                          SocialProofAvatars(urls: avatars, count: avatars.length, size: 16),
+                          const SizedBox(width: 6),
+                        ],
+                        Text(
+                          going ? '✓ You + ${event.attending - 1} going' : '${event.attending} going',
+                          style: const TextStyle(color: AppColors.muted, fontSize: 10),
                         ),
-                        const SizedBox(width: 6),
-                        Text('${event.attending} going', style: const TextStyle(color: AppColors.muted, fontSize: 10)),
                         const Spacer(),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
-                            color: event.soldOut ? Colors.white.withValues(alpha: 0.06) : event.color.withValues(alpha: 0.08),
+                            color: event.soldOut
+                                ? Colors.white.withValues(alpha: 0.06)
+                                : event.color.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(100),
                             border: Border.all(
-                                color: event.soldOut ? Colors.white.withValues(alpha: 0.06) : event.color.withValues(alpha: 0.15)),
+                              color: event.soldOut
+                                  ? Colors.white.withValues(alpha: 0.06)
+                                  : event.color.withValues(alpha: 0.15),
+                            ),
                           ),
-                          child: Text(event.spots,
-                              style: TextStyle(
-                                  color: event.soldOut ? AppColors.muted : event.color,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700)),
+                          child: Text(
+                            event.spotsLabel,
+                            style: TextStyle(
+                              color: event.soldOut ? AppColors.muted : event.color,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -1521,7 +1946,9 @@ class _CreateFab extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           gradient: const LinearGradient(colors: [AppColors.coral, AppColors.amber]),
-          boxShadow: [BoxShadow(color: AppColors.coral.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 4))],
+          boxShadow: [
+            BoxShadow(color: AppColors.coral.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 4)),
+          ],
         ),
         child: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
       ),

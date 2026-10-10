@@ -4,9 +4,23 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
-import '../../data/mock_social_data.dart';
 
 /// Result of a completed quick-rate flow.
+/// What a quick-rate sheet is rating (a dish, drink or place).
+class RateTarget {
+  const RateTarget({
+    required this.name,
+    required this.emoji,
+    required this.color,
+    this.isPlace = false,
+  });
+
+  final String name;
+  final String emoji;
+  final Color color;
+  final bool isPlace;
+}
+
 class QuickRateResult {
   const QuickRateResult({
     required this.rating,

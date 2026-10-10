@@ -10,9 +10,15 @@ abstract final class TableNames {
   static const String cookHistory = 'cook_history';
   static const String deviceTokens = 'device_tokens';
   static const String follows = 'follows';
+  static const String creators = 'creators';
   static const String feedPosts = 'feed_posts';
   static const String postComments = 'post_comments';
-  static const String postReactions = 'post_reactions';
+  static const String postLikes = 'post_likes';
+  static const String commentLikes = 'comment_likes';
+  static const String events = 'events';
+  static const String eventRsvps = 'event_rsvps';
+  static const String mutedCreators = 'muted_creators';
+  static const String reports = 'reports';
   static const String conversations = 'conversations';
   static const String conversationMembers = 'conversation_members';
   static const String messages = 'messages';

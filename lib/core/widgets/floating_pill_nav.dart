@@ -30,7 +30,7 @@ class FloatingPillNav extends StatelessWidget {
           bottom: 16 + MediaQuery.paddingOf(context).bottom,
           child: Center(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+              // padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
               decoration: BoxDecoration(
                 color: AppColors.bgDark.withValues(alpha: 0.9),
                 borderRadius: BorderRadius.circular(100),

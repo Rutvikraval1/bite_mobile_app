@@ -32,13 +32,19 @@ class PushService {
   bool _ready = false;
   bool get isReady => _ready;
 
+  /// In-flight [init]; [attach] waits on it so init never blocks startup.
+  Future<void>? _init;
+
   String? _token;
   String? _userId;
   NotificationRepository? _repository;
   final List<StreamSubscription<dynamic>> _subs = [];
 
   /// Call once at startup, before [runApp].
-  Future<void> init() async {
+  /// Starts Firebase setup; safe to call without awaiting.
+  Future<void> init() => _init ??= _initialize();
+
+  Future<void> _initialize() async {
     try {
       final options = _optionsFromEnv();
       if (options != null) {
@@ -67,6 +73,7 @@ class PushService {
     required PushOpenHandler onOpen,
     VoidCallback? onForegroundMessage,
   }) async {
+    await _init;
     if (!_ready || _userId == userId) return;
     await detach();
     _userId = userId;

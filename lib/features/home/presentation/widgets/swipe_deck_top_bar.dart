@@ -388,7 +388,8 @@ class _SubTabSwitcherState extends State<_SubTabSwitcher> {
     ];
     final index = items.indexWhere((i) => i.$1 == widget.subTab);
     return Container(
-      height: widget.tiny ? 34 : 42,
+      height: widget.tiny ? 34 : 34,
+      alignment: Alignment.center,
       decoration: BoxDecoration(
         color: const Color(0x0FFFFFFF),
         borderRadius: BorderRadius.circular(widget.tiny ? 12 : 16),
