@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/haptics_service.dart';
 import '../../../../core/services/premium_gate_service.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/state/app_state.dart';
@@ -13,6 +15,30 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../../../core/widgets/glass.dart';
+import '../../../content/domain/entities/bite_card.dart';
+import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../data/genie_filter_store.dart';
+import '../../domain/genie_filters.dart';
+import '../../domain/genie_suggestions.dart';
+
+/// What a hub tile does when tapped.
+enum _GenieActionKind {
+  /// Open [_GenieAction.dest].
+  navigate,
+
+  /// Open a personalized pick from the current deck in its detail screen.
+  suggest,
+
+  /// Switch the deck to Places.
+  nearby,
+
+  /// Open the highest-rated place.
+  topRated,
+
+  /// Open the best-rated place that's open now (reservation partners live
+  /// on the place page).
+  reserve,
+}
 
 /// One quick-action tile in the Genie hub grid.
 class _GenieAction {
@@ -21,7 +47,8 @@ class _GenieAction {
     required this.title,
     required this.desc,
     required this.color,
-    required this.dest,
+    this.kind = _GenieActionKind.navigate,
+    this.dest,
     this.premium = false,
     this.gateTitle,
     this.gateDesc,
@@ -31,54 +58,83 @@ class _GenieAction {
   final String title;
   final String desc;
   final Color color;
-  final AppScreen dest;
+  final _GenieActionKind kind;
+  final AppScreen? dest;
   final bool premium;
   final String? gateTitle;
   final String? gateDesc;
 }
 
+/// Opens [card] in its detail screen. Recipes/drinks go through
+/// [AppStateCubit.viewRecipe]; places are addressed by catalog index.
+void _openCard(BuildContext context, BiteCard card) {
+  final appState = context.read<AppStateCubit>();
+  final flow = context.read<FlowCubit>();
+  if (card.isPlace) {
+    final places = context.read<ContentCubit>().state.places;
+    final index = places.indexWhere((p) => p.id == card.id);
+    if (index < 0) return;
+    appState.setSubTab(DeckTab.places);
+    appState.setActiveCardIndex(index);
+    flow.setScreen(AppScreen.placeDetail);
+    return;
+  }
+  appState.setActiveCardIndex(0);
+  appState.viewRecipe(card);
+  flow.setScreen(AppScreen.recipeDetail);
+}
+
+bool _isOpen(BiteCard p) {
+  final s = (p.status ?? '').toLowerCase();
+  return s.contains('open') && !s.contains('closed');
+}
+
 /// The Genie hub — a bottom-anchored modal sheet with the AI orb, Crave
-/// Radar CTA, a 2×2 quick-action grid and the Meal Timing Planner banner.
-/// Ports `GenieScreen` from `screens-genie.jsx`.
+/// Radar search, a 2×2 quick-action grid, personalized picks and the Meal
+/// Timing Planner banner. Ports `GenieScreen` from `screens-genie.jsx`.
+///
+/// Picks, place stats and the filter badge come from live state
+/// ([ContentCubit] catalog, saved items and cook history; [AppStateCubit]
+/// cuisines/premium; [GenieFilterStore]). Chat / Scan / Meals / Planner open
+/// their own screens.
 class GenieScreen extends StatelessWidget {
   const GenieScreen({super.key});
 
-  List<_GenieAction> _actionsFor(DeckTab tab) {
+  List<_GenieAction> _actionsFor(DeckTab tab, ContentState content) {
     switch (tab) {
       case DeckTab.places:
-        return const [
+        final places = content.places;
+        final openCount = places.where(_isOpen).length;
+        return [
           _GenieAction(
             icon: '📍',
             title: 'Nearby',
-            desc: 'Find restaurants around you',
+            desc: places.isEmpty
+                ? 'Browse restaurants around you'
+                : '${places.length} spots · $openCount open now',
             color: AppColors.placesPurple,
-            dest: AppScreen.genieChat,
+            kind: _GenieActionKind.nearby,
           ),
-          _GenieAction(
-            icon: '🎯',
-            title: 'Filter',
-            desc: 'Cuisine, price, vibe & distance',
+          const _GenieAction(
+            icon: '⭐',
+            title: 'Top Rated',
+            desc: 'The highest-rated spot right now',
             color: AppColors.coral,
-            dest: AppScreen.genieFilter,
-            premium: true,
-            gateTitle: 'Smart Filters',
-            gateDesc:
-                'Unlock precision sliders for cuisine, price range, '
-                'vibe, distance, and dietary filters.',
+            kind: _GenieActionKind.topRated,
           ),
-          _GenieAction(
+          const _GenieAction(
             icon: '📸',
             title: 'Scan',
             desc: 'Snap a menu or storefront',
             color: AppColors.cyan,
             dest: AppScreen.genieScan,
           ),
-          _GenieAction(
+          const _GenieAction(
             icon: '🗓',
             title: 'Reserve',
             desc: 'Find open tables tonight',
             color: AppColors.saveGreen,
-            dest: AppScreen.placeDetail,
+            kind: _GenieActionKind.reserve,
             premium: true,
             gateTitle: 'Reservations',
             gateDesc:
@@ -93,19 +149,19 @@ class GenieScreen extends StatelessWidget {
             title: 'Suggest',
             desc: 'What should I mix?',
             color: AppColors.amber,
-            dest: AppScreen.genieChat,
+            kind: _GenieActionKind.suggest,
           ),
           _GenieAction(
             icon: '🎯',
             title: 'Filter',
-            desc: 'Spirit, mood, occasion & strength',
+            desc: 'Vibe, spirit, cuisine & type',
             color: AppColors.drinksBlue,
             dest: AppScreen.genieFilter,
             premium: true,
             gateTitle: 'Smart Filters',
             gateDesc:
-                'Filter by spirit type, strength, occasion, and '
-                'flavor profile.',
+                'Filter by spirit type, occasion, cuisine and '
+                'non-alcoholic options.',
           ),
           _GenieAction(
             icon: '📸',
@@ -134,19 +190,19 @@ class GenieScreen extends StatelessWidget {
             title: 'Suggest',
             desc: 'What should I cook?',
             color: AppColors.amber,
-            dest: AppScreen.genieChat,
+            kind: _GenieActionKind.suggest,
           ),
           _GenieAction(
             icon: '🎯',
             title: 'Filter',
-            desc: 'Narrow down by nutrition & vibe',
+            desc: 'Vibe, cuisine, diet, time & spice',
             color: AppColors.coral,
             dest: AppScreen.genieFilter,
             premium: true,
             gateTitle: 'Smart Filters',
             gateDesc:
-                'Unlock precision sliders for calories, macros, cook '
-                'time, spice level, and dietary filters.',
+                'Unlock precision filters for cook time, spice level, '
+                'difficulty, cuisine and dietary needs.',
           ),
           _GenieAction(
             icon: '📸',
@@ -171,8 +227,8 @@ class GenieScreen extends StatelessWidget {
     }
   }
 
-  void _openAction(BuildContext context, _GenieAction a, bool isPremium) {
-    if (a.premium && !isPremium) {
+  void _openAction(BuildContext context, _GenieAction a, AppState state) {
+    if (a.premium && !state.isPremium) {
       PremiumGateService.instance.show(
         a.gateTitle ?? a.title,
         'premium',
@@ -180,16 +236,99 @@ class GenieScreen extends StatelessWidget {
       );
       return;
     }
-    context.read<FlowCubit>().setScreen(a.dest);
+    final flow = context.read<FlowCubit>();
+    final content = context.read<ContentCubit>().state;
+    switch (a.kind) {
+      case _GenieActionKind.navigate:
+        final dest = a.dest;
+        if (dest != null) flow.setScreen(dest);
+      case _GenieActionKind.suggest:
+        _surprise(context, state);
+      case _GenieActionKind.nearby:
+        final appState = context.read<AppStateCubit>();
+        appState.setSubTab(DeckTab.places);
+        appState.setActiveCardIndex(0);
+        flow.setScreen(AppScreen.swipeDeck);
+      case _GenieActionKind.topRated:
+      case _GenieActionKind.reserve:
+        final pool = a.kind == _GenieActionKind.reserve
+            ? content.places.where(_isOpen).toList()
+            : content.places;
+        final best = GenieSuggestions.rankPlaces(
+          places: pool,
+          favoriteCuisines: state.userCuisines,
+          limit: 1,
+        );
+        if (best.isEmpty) {
+          ToastService.instance.show(
+            content.loading
+                ? '⏳ Still loading places…'
+                : a.kind == _GenieActionKind.reserve
+                ? '😴 No places are open right now'
+                : 'No places to show yet',
+          );
+          return;
+        }
+        _openCard(context, best.first.card);
+    }
+  }
+
+  /// "Suggest" — opens a random pick from the top personalized matches.
+  void _surprise(BuildContext context, AppState state) {
+    final content = context.read<ContentCubit>().state;
+    final drinks = state.subTab == DeckTab.drinks;
+    final picks = GenieSuggestions.rank(
+      pool: drinks ? content.drinks : content.recipes,
+      favoriteCuisines: state.userCuisines,
+      saved: content.savedItems,
+      cookHistory: content.cookHistory,
+      filters: GenieFilterStore.instance.appliedFor(state.subTab),
+      kind: drinks ? GenieFilterKind.drinks : GenieFilterKind.food,
+      limit: 5,
+    );
+    if (picks.isEmpty) {
+      ToastService.instance.show(
+        content.loading
+            ? '⏳ Still loading — try again in a sec'
+            : '🤷 Nothing matches right now — try clearing your filters',
+      );
+      return;
+    }
+    HapticsService.medium();
+    final pick = picks[Random().nextInt(picks.length)];
+    ToastService.instance.show('✨ ${pick.reason}');
+    _openCard(context, pick.card);
+  }
+
+  void _openCraveRadar(BuildContext context) {
+    HapticsService.light();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => BlocProvider.value(
+        value: context.read<ContentCubit>(),
+        child: _CraveRadarSheet(
+          favoriteCuisines: context.read<AppStateCubit>().state.userCuisines,
+          onOpen: (card) {
+            Navigator.of(context).pop();
+            _openCard(context, card);
+          },
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<AppStateCubit, AppState>(
       buildWhen: (prev, curr) =>
-          prev.subTab != curr.subTab || prev.isPremium != curr.isPremium,
+          prev.subTab != curr.subTab ||
+          prev.isPremium != curr.isPremium ||
+          prev.userCuisines != curr.userCuisines,
       builder: (context, state) {
-        final actions = _actionsFor(state.subTab);
+        final content = context.watch<ContentCubit>().state;
+        final actions = _actionsFor(state.subTab, content);
         final flow = context.read<FlowCubit>();
 
         return Material(
@@ -235,12 +374,12 @@ class GenieScreen extends StatelessWidget {
                                   ),
                                   child: _GenieSheetContent(
                                     actions: actions,
-                                    isPremium: state.isPremium,
-                                    onOpen: (a) => _openAction(
-                                      context,
-                                      a,
-                                      state.isPremium,
-                                    ),
+                                    state: state,
+                                    content: content,
+                                    onOpen: (a) =>
+                                        _openAction(context, a, state),
+                                    onCraveRadar: () =>
+                                        _openCraveRadar(context),
                                   ),
                                 ),
                               ),
@@ -263,17 +402,47 @@ class GenieScreen extends StatelessWidget {
 class _GenieSheetContent extends StatelessWidget {
   const _GenieSheetContent({
     required this.actions,
-    required this.isPremium,
+    required this.state,
+    required this.content,
     required this.onOpen,
+    required this.onCraveRadar,
   });
 
   final List<_GenieAction> actions;
-  final bool isPremium;
+  final AppState state;
+  final ContentState content;
   final ValueChanged<_GenieAction> onOpen;
+  final VoidCallback onCraveRadar;
+
+  bool get isPremium => state.isPremium;
+
+  List<GenieSuggestion> _picks() {
+    switch (state.subTab) {
+      case DeckTab.places:
+        return GenieSuggestions.rankPlaces(
+          places: content.places,
+          favoriteCuisines: state.userCuisines,
+        );
+      case DeckTab.drinks:
+      case DeckTab.food:
+        final drinks = state.subTab == DeckTab.drinks;
+        return GenieSuggestions.rank(
+          pool: drinks ? content.drinks : content.recipes,
+          favoriteCuisines: state.userCuisines,
+          saved: content.savedItems,
+          cookHistory: content.cookHistory,
+          filters: GenieFilterStore.instance.appliedFor(state.subTab),
+          kind: drinks ? GenieFilterKind.drinks : GenieFilterKind.food,
+        );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final flow = context.read<FlowCubit>();
+    final picks = _picks();
+    final savedCount = content.savedItems.length;
+    final cookedCount = content.cookHistory.length;
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -341,25 +510,22 @@ class _GenieSheetContent extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Your AI cooking & discovery assistant',
-                    style: TextStyle(color: AppColors.muted, fontSize: 13),
+                  Text(
+                    savedCount + cookedCount == 0
+                        ? 'Your AI cooking & discovery assistant'
+                        : '🔖 $savedCount saved · 🍳 $cookedCount cooked',
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 13,
+                    ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 20),
-            ZoomIn(
-              child: _CraveRadarCta(
-                onTap: () {
-                  ToastService.instance.show(
-                    '🔍 Crave Radar — tell me what you’re craving!',
-                  );
-                  flow.goBack();
-                },
-              ),
-            ),
+            ZoomIn(child: _CraveRadarCta(onTap: onCraveRadar)),
             const SizedBox(height: 14),
+            _ActiveFiltersBar(tab: state.subTab),
             GridView.count(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -379,6 +545,15 @@ class _GenieSheetContent extends StatelessWidget {
                   ),
               ],
             ),
+            if (picks.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _PicksRow(
+                title: state.subTab == DeckTab.places
+                    ? 'GENIE PICKS NEARBY'
+                    : 'GENIE PICKS FOR YOU',
+                picks: picks,
+              ),
+            ],
             const SizedBox(height: 12),
             Glass(
               borderRadius: 20,
@@ -388,7 +563,7 @@ class _GenieSheetContent extends StatelessWidget {
                   : AppColors.amber.withValues(alpha: 0.13),
               onTap: () {
                 if (isPremium) {
-                  flow.setScreen(AppScreen.genieMeals);
+                  flow.setScreen(AppScreen.geniePlanner);
                 } else {
                   PremiumGateService.instance.show(
                     'Meal Timing Planner',
@@ -462,10 +637,14 @@ class _GenieSheetContent extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 2),
-                        const Text(
-                          "Time your dishes so everything's hot & ready at "
-                          'once',
-                          style: TextStyle(
+                        Text(
+                          state.mealItems.isEmpty
+                              ? "Time your dishes so everything's hot & ready "
+                                    'at once'
+                              : '${state.mealItems.length} '
+                                    '${state.mealItems.length == 1 ? 'dish' : 'dishes'} '
+                                    'in your meal tray — plan the timing',
+                          style: const TextStyle(
                             color: AppColors.muted,
                             fontSize: 12,
                           ),
@@ -524,36 +703,11 @@ class _GenieSheetContent extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    Row(
-                      children: [
-                        for (var i = 0; i < 3; i++)
-                          Container(
-                            margin: const EdgeInsets.only(right: 3),
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: i < 2
-                                  ? AppColors.amber
-                                  : Colors.white.withValues(alpha: 0.12),
-                              boxShadow: i < 2
-                                  ? [
-                                      BoxShadow(
-                                        color: AppColors.amber.withValues(
-                                          alpha: 0.27,
-                                        ),
-                                        blurRadius: 6,
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(width: 6),
+                    const Text('✨', style: TextStyle(fontSize: 12)),
+                    const SizedBox(width: 8),
                     const Expanded(
                       child: Text(
-                        '2 of 3 free requests today',
+                        'Free plan — picks, Crave Radar & Suggest included',
                         style: TextStyle(color: AppColors.muted, fontSize: 11),
                       ),
                     ),
@@ -585,10 +739,13 @@ class _GenieSheetContent extends StatelessWidget {
                 ),
               ),
             const SizedBox(height: 6),
-            const Text(
-              'Genie learns your taste with every swipe ✨',
+            Text(
+              state.userCuisines.isEmpty
+                  ? 'Picks are based on your saves & cook history ✨'
+                  : 'Picks are based on your ${state.userCuisines.length} '
+                        'favorite cuisines, saves & cooks ✨',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0x40FFFFFF), fontSize: 11),
+              style: const TextStyle(color: Color(0x40FFFFFF), fontSize: 11),
             ),
             const SizedBox(height: 16),
             GestureDetector(
@@ -644,6 +801,481 @@ class _GenieSheetContent extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// "🎯 N filters on" strip — shown while Genie filters narrow this deck.
+class _ActiveFiltersBar extends StatelessWidget {
+  const _ActiveFiltersBar({required this.tab});
+
+  final DeckTab tab;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = GenieFilterStore.instance;
+    return ValueListenableBuilder<Map<GenieFilterKind, GenieFilters>>(
+      valueListenable: store.applied,
+      builder: (context, _, _) {
+        final filters = store.appliedFor(tab);
+        final kind = GenieFilterStore.kindFor(tab);
+        if (filters == null || kind == null) return const SizedBox.shrink();
+        final content = context.watch<ContentCubit>().state;
+        final pool = kind == GenieFilterKind.drinks
+            ? content.drinks
+            : content.recipes;
+        final matches = filters.apply(pool, kind).length;
+        final n = filters.activeCount;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Glass(
+            borderRadius: 14,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            borderColor: AppColors.coral.withValues(alpha: 0.3),
+            onTap: () =>
+                context.read<FlowCubit>().setScreen(AppScreen.genieFilter),
+            child: Row(
+              children: [
+                const Text('🎯', style: TextStyle(fontSize: 14)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '$n ${n == 1 ? 'filter' : 'filters'} on · '
+                    '$matches of ${pool.length} in your deck',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () {
+                    HapticsService.light();
+                    store.deactivate(kind);
+                    ToastService.instance.show(
+                      '🍽 Showing everything — filters stay saved',
+                    );
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.only(left: 8),
+                    child: Text(
+                      'Turn off',
+                      style: TextStyle(
+                        color: AppColors.coral,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Horizontal row of personalized picks, each with its reason.
+class _PicksRow extends StatelessWidget {
+  const _PicksRow({required this.title, required this.picks});
+
+  final String title;
+  final List<GenieSuggestion> picks;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            color: AppColors.muted,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            for (var i = 0; i < picks.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              Expanded(
+                child: Glass(
+                  borderRadius: 16,
+                  padding: const EdgeInsets.all(10),
+                  onTap: () => _openCard(context, picks[i].card),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        picks[i].card.emoji.isEmpty
+                            ? '🍽'
+                            : picks[i].card.emoji,
+                        style: const TextStyle(fontSize: 22),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        picks[i].card.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        picks[i].reason,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.amber,
+                          fontSize: 10,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Crave Radar — type a craving, get real places that serve it (by name,
+/// cuisine, tags and menu highlights) plus recipes to cook it yourself.
+class _CraveRadarSheet extends StatefulWidget {
+  const _CraveRadarSheet({
+    required this.favoriteCuisines,
+    required this.onOpen,
+  });
+
+  final List<String> favoriteCuisines;
+  final ValueChanged<BiteCard> onOpen;
+
+  @override
+  State<_CraveRadarSheet> createState() => _CraveRadarSheetState();
+}
+
+class _CraveRadarSheetState extends State<_CraveRadarSheet> {
+  final TextEditingController _query = TextEditingController();
+
+  @override
+  void dispose() {
+    _query.dispose();
+    super.dispose();
+  }
+
+  static int _score(BiteCard c, List<String> terms) {
+    final title = c.title.toLowerCase();
+    final cuisine = c.cuisine.toLowerCase();
+    final tags = GenieFilters.tagsOf(c);
+    final menu = [for (final m in c.menuHighlights) m.name.toLowerCase()];
+    var score = 0;
+    for (final t in terms) {
+      final norm = GenieFilters.normalize(t);
+      var hit = 0;
+      if (title.contains(t)) hit = 3;
+      if (hit == 0 && menu.any((m) => m.contains(t))) hit = 3;
+      if (hit == 0 && cuisine.contains(t)) hit = 2;
+      if (hit == 0 && norm.isNotEmpty && tags.any((g) => g.contains(norm))) {
+        hit = 1;
+      }
+      if (hit == 0) return 0; // every word must match something
+      score += hit;
+    }
+    return score;
+  }
+
+  List<BiteCard> _search(List<BiteCard> pool, List<String> terms) {
+    final scored = [
+      for (final c in pool)
+        if (_score(c, terms) case final s when s > 0) (card: c, score: s),
+    ]..sort((a, b) {
+        final byScore = b.score.compareTo(a.score);
+        if (byScore != 0) return byScore;
+        return (b.card.rating ?? 0).compareTo(a.card.rating ?? 0);
+      });
+    return [for (final s in scored) s.card];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final content = context.watch<ContentCubit>().state;
+    final terms = _query.text
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((t) => t.length > 1)
+        .toList();
+    final places = terms.isEmpty
+        ? const <BiteCard>[]
+        : _search(content.places, terms);
+    final recipes = terms.isEmpty
+        ? const <BiteCard>[]
+        : _search(content.recipes, terms);
+    final quick = [
+      ...widget.favoriteCuisines.take(4),
+      for (final s in const ['Tacos', 'Ramen', 'Spicy', 'Pasta'])
+        if (!widget.favoriteCuisines.contains(s)) s,
+    ].take(6).toList();
+    final height = MediaQuery.sizeOf(context).height;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: Container(
+        constraints: BoxConstraints(maxHeight: height * 0.8),
+        decoration: const BoxDecoration(
+          color: AppColors.bgDark,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(vertical: 12),
+                  width: 48,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Text(
+                  '🔍 Crave Radar',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: TextField(
+                  controller: _query,
+                  autofocus: true,
+                  textInputAction: TextInputAction.search,
+                  onChanged: (_) => setState(() {}),
+                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                  cursorColor: AppColors.cyan,
+                  decoration: InputDecoration(
+                    hintText: 'What are you craving? e.g. birria tacos',
+                    hintStyle: const TextStyle(color: AppColors.muted),
+                    prefixIcon: const Icon(Icons.search, color: AppColors.cyan),
+                    suffixIcon: _query.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(
+                              Icons.close,
+                              size: 18,
+                              color: AppColors.muted,
+                            ),
+                            onPressed: () => setState(_query.clear),
+                          ),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.06),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(100),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 34,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: quick.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) => GestureDetector(
+                    onTap: () => setState(() {
+                      _query.text = quick[i];
+                      _query.selection = TextSelection.collapsed(
+                        offset: quick[i].length,
+                      );
+                    }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.cyan.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(100),
+                        border: Border.all(
+                          color: AppColors.cyan.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Text(
+                        quick[i],
+                        style: const TextStyle(
+                          color: AppColors.cyan,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: terms.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.fromLTRB(20, 16, 20, 24),
+                        child: Text(
+                          'Type a dish, ingredient or cuisine — I’ll find '
+                          'who serves it and how to make it.',
+                          style: TextStyle(color: AppColors.muted, fontSize: 13),
+                        ),
+                      )
+                    : places.isEmpty && recipes.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                        child: Text(
+                          content.loading
+                              ? 'Loading places & recipes…'
+                              : 'No matches for “${_query.text.trim()}” yet — '
+                                    'try a cuisine or a single dish name.',
+                          style: const TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 13,
+                          ),
+                        ),
+                      )
+                    : ListView(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                        children: [
+                          if (places.isNotEmpty) ...[
+                            _label('SERVED NEARBY'),
+                            for (final p in places.take(6))
+                              _ResultRow(
+                                card: p,
+                                subtitle: [
+                                  if (p.rating != null)
+                                    '★ ${p.rating!.toStringAsFixed(1)}',
+                                  ?p.distance,
+                                  ?p.status,
+                                ].join(' · '),
+                                onTap: () => widget.onOpen(p),
+                              ),
+                          ],
+                          if (recipes.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            _label('COOK IT YOURSELF'),
+                            for (final r in recipes.take(6))
+                              _ResultRow(
+                                card: r,
+                                subtitle: [
+                                  if (r.cuisine.isNotEmpty) r.cuisine,
+                                  if (r.time.isNotEmpty) r.time,
+                                  if (r.diff.isNotEmpty) r.diff,
+                                ].join(' · '),
+                                onTap: () => widget.onOpen(r),
+                              ),
+                          ],
+                        ],
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _label(String text) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(
+      text,
+      style: const TextStyle(
+        color: AppColors.muted,
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1,
+      ),
+    ),
+  );
+}
+
+class _ResultRow extends StatelessWidget {
+  const _ResultRow({
+    required this.card,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final BiteCard card;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Glass(
+        borderRadius: 14,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        onTap: onTap,
+        child: Row(
+          children: [
+            Text(
+              card.emoji.isEmpty ? '🍽' : card.emoji,
+              style: const TextStyle(fontSize: 22),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    card.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty)
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, size: 16, color: AppColors.muted),
+          ],
+        ),
+      ),
     );
   }
 }

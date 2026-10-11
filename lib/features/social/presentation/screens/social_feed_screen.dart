@@ -24,6 +24,8 @@ import '../../../../core/widgets/social_proof_avatars.dart';
 import '../../../auth/domain/entities/profile.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/domain/entities/bite_card.dart';
+import '../../../content/domain/entities/cook_entry.dart';
+import '../../../content/domain/entities/saved_item.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
 import '../../domain/social_models.dart';
 import '../blocs/follow_cubit.dart';
@@ -39,17 +41,6 @@ const List<(String id, String label)> _filters = [
   ('following', 'Following'),
   ('creators', 'Creators'),
   ('events', '🎪 Events'),
-];
-
-/// Gamification level thresholds — ports the `levels` array in the JS.
-const List<(String name, int min, String emoji)> _levels = [
-  ('Curious', 0, '🥄'),
-  ('Beginner', 10, '🍳'),
-  ('Home Cook', 30, '🥘'),
-  ('Sous Chef', 75, '👨‍🍳'),
-  ('Chef', 150, '🧑‍🍳'),
-  ('Master Chef', 300, '⭐'),
-  ('b🌶te Legend', 600, '🔥'),
 ];
 
 /// Events category chips → `events.category`.
@@ -98,6 +89,9 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
   Timer? _bannerTimer;
 
   String _activeFilter = 'feed';
+
+  /// For You sub-section: picks | published | cooked | saved | drafts.
+  String _forYouSection = 'picks';
   String? _eventCategory;
   bool _bannerDismissed = false;
   FeedPost? _commentPost;
@@ -134,6 +128,12 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
     if (id == 'forYou' || id == 'trending') {
       // Rankings move with every save, cook, like and swipe.
       context.read<SocialFeedCubit>().loadDiscover();
+    }
+    if (id == 'forYou') {
+      // The signed-in user's own recipes, cooks and saves.
+      final content = context.read<ContentCubit>();
+      content.reloadProfileContent();
+      content.reloadSaved();
     }
   }
 
@@ -286,10 +286,7 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
     final recipes = context.watch<ContentCubit>().state.recipes;
     return SliverToBoxAdapter(
       child: switch (_activeFilter) {
-        'forYou' =>
-          feed.discoverLoaded
-              ? _buildGridTab(_forYouCards(recipes, feed.forYouIds, state.userCuisines))
-              : const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _FeedSkeleton()),
+        'forYou' => _buildForYouTab(state, feed, profile),
         'trending' =>
           feed.discoverLoaded
               ? _buildGridTab(_trendingCards(recipes, feed.trending), trending: true)
@@ -452,8 +449,206 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
 
   // ── FOR YOU / TRENDING TAB ──
 
-  /// For You: the server's per-user picks ([for_you_recipes]); falls back
-  /// to profile cuisines + saves if the ranking isn't available.
+  /// For You: the signed-in user's own activity (published, cooked, saved,
+  /// drafts) plus personal picks. Signed-out users only see picks.
+  Widget _buildForYouTab(AppState state, SocialFeedState feed, Profile? profile) {
+    final content = context.watch<ContentCubit>().state;
+    final signedIn = profile != null;
+    final published = content.publishedRecipes;
+    final drafts = content.draftRecipes;
+    final cooked = content.cookHistory;
+    final saved = content.savedItems;
+    final section = signedIn ? _forYouSection : 'picks';
+
+    final sections = [
+      ('picks', '✨', 'Picks', null),
+      if (signedIn) ...[
+        ('published', '📢', 'Published', published.length),
+        ('cooked', '🍳', 'Cooked', cooked.length),
+        ('saved', '🔖', 'Saved', saved.length),
+        ('drafts', '📝', 'Drafts', drafts.length),
+      ],
+    ];
+
+    final loadingOwn = section != 'picks' &&
+        (section == 'saved' ? content.savedLoading : content.profileLoading);
+    final Widget body;
+    if (section == 'picks' && !feed.discoverLoaded) {
+      body = const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _FeedSkeleton());
+    } else if (loadingOwn &&
+        switch (section) {
+          'published' => published.isEmpty,
+          'cooked' => cooked.isEmpty,
+          'saved' => saved.isEmpty,
+          _ => drafts.isEmpty,
+        }) {
+      body = const Padding(padding: EdgeInsets.symmetric(horizontal: 20), child: _FeedSkeleton());
+    } else {
+      final cards = switch (section) {
+        'published' => _ownRecipeCards(published),
+        'cooked' => _cookedCards(cooked),
+        'saved' => _savedCards(saved, content),
+        'drafts' => _ownRecipeCards(drafts, draft: true),
+        _ => _forYouCards(content.recipes, feed.forYouIds, state.userCuisines),
+      };
+      body = cards.isEmpty ? _forYouEmpty(section) : _buildGridTab(cards);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (signedIn)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Row(
+              children: [
+                for (final (id, emoji, label, count) in sections.skip(1))
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 3),
+                      child: _ForYouStat(
+                        emoji: emoji,
+                        label: label,
+                        count: count ?? 0,
+                        selected: section == id,
+                        onTap: () => setState(() => _forYouSection = id),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        SizedBox(
+          height: 40,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            children: [
+              for (final (id, emoji, label, count) in sections)
+                _FilterPill(
+                  label: count == null ? '$emoji $label' : '$emoji $label ($count)',
+                  selected: section == id,
+                  onTap: () => setState(() => _forYouSection = id),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        body,
+      ],
+    );
+  }
+
+  Widget _forYouEmpty(String section) {
+    final (emoji, title, message, cta, screen) = switch (section) {
+      'published' => ('📢', 'No published recipes yet', 'Share your first recipe with the community.', 'Create a recipe', AppScreen.creatorCreate),
+      'cooked' => ('🍳', 'Nothing cooked yet', 'Cook a recipe and it will show up here.', 'Find a recipe', AppScreen.swipeDeck),
+      'saved' => ('🔖', 'Nothing saved yet', 'Swipe up on a card to save it.', 'Start swiping', AppScreen.swipeDeck),
+      'drafts' => ('📝', 'No drafts', 'Recipes you save as a draft stay private here.', 'Create a recipe', AppScreen.creatorCreate),
+      _ => ('🍽', 'Nothing here yet', 'Recipes will show up here soon.', null, null),
+    };
+    return Column(
+      children: [
+        _EmptyBlock(emoji: emoji, title: title, message: message),
+        if (cta != null && screen != null)
+          GestureDetector(
+            onTap: () {
+              if (screen == AppScreen.creatorCreate) context.read<AppStateCubit>().editRecipe(null);
+              context.read<FlowCubit>().setScreen(screen);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              decoration: BoxDecoration(color: AppColors.coral, borderRadius: BorderRadius.circular(100)),
+              child: Text(cta, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// The user's own recipes (published or drafts), newest first.
+  List<_GridItem> _ownRecipeCards(List<BiteCard> recipes, {bool draft = false}) {
+    return [
+      for (final (i, r) in recipes.indexed)
+        _GridItem(
+          recipeId: r.id,
+          title: r.title,
+          user: '${r.cuisine} · ${r.time}',
+          emoji: r.emoji,
+          color: _palette[i % 4],
+          big: i == 0,
+          comment: draft
+              ? '📝 Draft${r.createdAt != null ? ' · ${_ago(r.createdAt!)}' : ''}'
+              : '❤️ ${r.hearts.isEmpty ? '0' : r.hearts} · 💬 ${r.comments}'
+                  '${r.createdAt != null ? ' · ${_ago(r.createdAt!)}' : ''}',
+          onTap: draft
+              ? () {
+                  // Drafts are private — open them in the editor.
+                  context.read<AppStateCubit>().editRecipe(r);
+                  context.read<FlowCubit>().setScreen(AppScreen.creatorCreate);
+                }
+              : null,
+        ),
+    ];
+  }
+
+  /// The user's cooking history, newest first.
+  List<_GridItem> _cookedCards(List<CookEntry> cooked) {
+    return [
+      for (final (i, c) in cooked.indexed)
+        _GridItem(
+          recipeId: c.recipeId,
+          title: c.title,
+          user: 'Cooked ${_ago(c.cookedAt)}',
+          emoji: c.emoji,
+          color: _palette[(i + 1) % 4],
+          big: i == 0,
+          comment: c.rating != null ? '⭐' * c.rating!.clamp(1, 5) : null,
+        ),
+    ];
+  }
+
+  /// Saved recipes, drinks and places, newest first.
+  List<_GridItem> _savedCards(List<SavedItem> saved, ContentState content) {
+    return [
+      for (final (i, s) in saved.indexed)
+        _GridItem(
+          title: s.title,
+          user: [
+            switch (s.itemType) { 'place' => '📍 Place', 'drink' => '🍸 Drink', _ => '🍽 Recipe' },
+            if (s.cuisine != null && s.cuisine!.isNotEmpty) s.cuisine!,
+          ].join(' · '),
+          emoji: s.emoji,
+          color: _palette[(i + 2) % 4],
+          big: i == 0,
+          comment: s.createdAt != null ? 'Saved ${_ago(s.createdAt!)}' : null,
+          onTap: () => _openSaved(s, content),
+        ),
+    ];
+  }
+
+  void _openSaved(SavedItem item, ContentState content) {
+    if (item.itemType == 'place') {
+      final index = content.places.indexWhere((p) => p.id == item.itemId);
+      if (index < 0) {
+        ToastService.instance.show('This place is no longer available');
+        return;
+      }
+      context.read<AppStateCubit>().setActiveCardIndex(index);
+      context.read<FlowCubit>().setScreen(AppScreen.placeDetail);
+      return;
+    }
+    final card = content.findCard(item.itemId, drink: item.itemType == 'drink');
+    if (card == null) {
+      ToastService.instance.show('This recipe is no longer available');
+      return;
+    }
+    context.read<AppStateCubit>().viewRecipe(card);
+    context.read<FlowCubit>().setScreen(AppScreen.recipeDetail);
+  }
+
+  /// Personal picks: the server's per-user ranking ([for_you_recipes]);
+  /// falls back to profile cuisines + saves if the ranking isn't available.
   List<_GridItem> _forYouCards(List<BiteCard> recipes, List<int> rankedIds, List<String> cuisines) {
     final byId = {for (final r in recipes) r.id: r};
     final ranked = [for (final id in rankedIds) ?byId[id]];
@@ -467,8 +662,16 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
             return Formatters.numOf(b.saved).compareTo(Formatters.numOf(a.saved));
           }));
     return [
-      for (final (i, r) in sorted.take(4).indexed)
-        _GridItem(recipeId: r.id, title: r.title, user: r.creator, emoji: r.emoji, color: _palette[i % 4], big: i == 0),
+      for (final (i, r) in sorted.take(10).indexed)
+        _GridItem(
+          recipeId: r.id,
+          title: r.title,
+          user: r.creator,
+          emoji: r.emoji,
+          color: _palette[i % 4],
+          big: i == 0,
+          comment: wanted.contains(r.cuisine.toLowerCase()) ? '🎯 ${r.cuisine} · you like this' : null,
+        ),
     ];
   }
 
@@ -775,9 +978,13 @@ class _GridItem {
     this.big = false,
     this.trend,
     this.comment,
+    this.onTap,
   });
 
   final int? recipeId;
+
+  /// Overrides the default open-recipe/creator behaviour.
+  final VoidCallback? onTap;
 
   /// Opened when there's no recipe to show.
   final String? creatorHandle;
@@ -788,6 +995,55 @@ class _GridItem {
   final bool big;
   final String? trend;
   final String? comment;
+}
+
+/// Tappable count tile at the top of the For You tab.
+class _ForYouStat extends StatelessWidget {
+  const _ForYouStat({
+    required this.emoji,
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String emoji;
+  final String label;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.coral.withValues(alpha: 0.15) : AppColors.glass,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: selected ? AppColors.coral.withValues(alpha: 0.4) : AppColors.glassBorder),
+        ),
+        child: Column(
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 2),
+            Text(
+              '$count',
+              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800),
+            ),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: selected ? AppColors.coral : AppColors.muted, fontSize: 10, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _EmptyBlock extends StatelessWidget {
@@ -868,13 +1124,13 @@ class _PointsBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    var current = _levels.first;
-    for (final l in _levels) {
-      if (xp >= l.$2) current = l;
-    }
-    final nextIndex = _levels.indexOf(current) + 1;
-    final next = nextIndex < _levels.length ? _levels[nextIndex] : current;
-    final progress = next == current ? 1.0 : ((xp - current.$2) / (next.$2 - current.$2)).clamp(0.0, 1.0);
+    // Same level ladder as everywhere else (loaded from `xp_tiers`).
+    final tiers = TierDefinitions.all;
+    final tier = TierDefinitions.tierFor(xp);
+    final nextIndex = tiers.indexOf(tier) + 1;
+    final next = nextIndex < tiers.length ? tiers[nextIndex] : null;
+    final progress = TierDefinitions.progressInTier(xp);
+    final current = (tier.name, tier.min, tier.emoji);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -935,7 +1191,7 @@ class _PointsBanner extends StatelessWidget {
                           current.$1,
                           style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
                         ),
-                        Text('$xp/${next.$2} pts', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                        Text(next == null ? '$xp pts' : '$xp/${next.min} pts', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -1572,6 +1828,7 @@ class _RecipeGridCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       child: GestureDetector(
         onTap: () {
+          if (card.onTap != null) return card.onTap!();
           if (openRecipe(context, card.recipeId)) return;
           final handle = card.creatorHandle;
           if (handle != null) {

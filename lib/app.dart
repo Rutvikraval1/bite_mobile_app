@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'core/config/app_config.dart';
+import 'core/constants/tier_definitions.dart';
 import 'core/network/supabase_client_provider.dart';
 import 'core/router/app_screen.dart';
 import 'core/router/flow_cubit.dart';
@@ -96,6 +97,8 @@ class _BiteAppState extends State<BiteApp> {
   Future<void> _init() async {
     try {
       await SupabaseClientProvider.instance.initialize();
+      // Level ladder from `xp_tiers`; widgets rebuild when it arrives.
+      unawaited(TierDefinitions.load());
       if (mounted) setState(() => _ready = true);
     } catch (e) {
       debugPrint('[bite] Supabase init failed: $e');
@@ -114,6 +117,13 @@ class _BiteAppState extends State<BiteApp> {
       title: AppConfig.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
+      // App-wide Material ancestor for every route, dialog and overlay, so
+      // text outside a Scaffold/Material never falls back to Flutter's yellow
+      // double-underline "missing Material" style.
+      builder: (context, child) => Material(
+        type: MaterialType.transparency,
+        child: child,
+      ),
       home: switch (_ready) {
         null => const _BootScreen(),
         false => ConfigErrorScreen(onRetry: _retry),
@@ -378,7 +388,7 @@ Widget _screenFor(AppScreen screen) {
     AppScreen.eloVoting => const EloVotingScreen(),
 
     AppScreen.cookingLevel => const CookingLevelScreen(),
-    AppScreen.tipFlow => const TipFlowScreen(),
+    AppScreen.tipFlow => TipFlowScreen.fromSelection(),
     AppScreen.mealReminder => const MealReminderScreen(),
   };
 }

@@ -13,6 +13,7 @@ abstract final class TableNames {
   static const String creators = 'creators';
   static const String feedPosts = 'feed_posts';
   static const String postComments = 'post_comments';
+  static const String recipeComments = 'recipe_comments';
   static const String postLikes = 'post_likes';
   static const String commentLikes = 'comment_likes';
   static const String events = 'events';
@@ -23,6 +24,9 @@ abstract final class TableNames {
   static const String conversationMembers = 'conversation_members';
   static const String messages = 'messages';
   static const String reviews = 'reviews';
+  static const String recipeLikes = 'recipe_likes';
+  static const String placeReviews = 'place_reviews';
+  static const String placeReviewStats = 'place_review_stats';
   static const String competitions = 'competitions';
   static const String competitionEntries = 'competition_entries';
   static const String eloEntries = 'elo_entries';
@@ -33,4 +37,5 @@ abstract final class TableNames {
   static const String genieConversations = 'genie_conversations';
   static const String genieMessages = 'genie_messages';
   static const String subscriptions = 'subscriptions';
+  static const String xpTiers = 'xp_tiers';
 }

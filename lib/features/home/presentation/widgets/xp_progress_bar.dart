@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/constants/tier_definitions.dart';
 import '../../../../core/theme/app_colors.dart';
 
-/// Tier entry for the XP bar — mirrors the prototype ladder.
+/// Tier entry for the XP bar: a level from [TierDefinitions] (the app-wide
+/// ladder) plus the bar's gradient colours and the next level's details.
 class _XpTier {
   const _XpTier(this.min, this.max, this.level, this.name, this.emoji,
-      this.color, this.colorEnd, this.nextColor, this.nextEmoji);
+      this.color, this.colorEnd, this.nextColor, this.nextEmoji, this.nextName);
 
   final int min;
   final int max;
@@ -16,20 +18,22 @@ class _XpTier {
   final Color colorEnd;
   final Color nextColor;
   final String nextEmoji;
+
+  /// Null at the top level.
+  final String? nextName;
 }
 
-const List<_XpTier> _tiers = [
-  _XpTier(0, 10, 1, 'Curious', '👀', Color(0xFF64B5F6), Color(0xFF42A5F5),
-      Color(0xFF4CAF50), '🥄'),
-  _XpTier(10, 30, 2, 'Beginner', '🥄', Color(0xFF4CAF50), Color(0xFF66BB6A),
-      AppColors.coral, '🍳'),
-  _XpTier(30, 75, 3, 'Home Cook', '🍳', AppColors.coral, Color(0xFFFF8A65),
-      AppColors.placesPurple, '🧑‍🍳'),
-  _XpTier(75, 150, 4, 'Sous Chef', '🧑‍🍳', AppColors.placesPurple,
-      Color(0xFFAB47BC), AppColors.amber, '👨‍🍳'),
-  _XpTier(150, 300, 5, 'Chef', '👨‍🍳', AppColors.amber, Color(0xFFFFD54F),
-      Color(0xFFFFD700), '🏆'),
-];
+/// Gradient end colour per level (the start colour is the tier's own);
+/// levels added in the database without one use a lighter tier colour.
+const Map<int, Color> _colorEnd = {
+  1: Color(0xFF42A5F5),
+  2: Color(0xFF66BB6A),
+  3: Color(0xFFFF8A65),
+  4: Color(0xFFAB47BC),
+  5: Color(0xFFFFD54F),
+  6: Color(0xFFBA68C8),
+  7: Color(0xFFFFE082),
+};
 
 /// Tier-themed XP progress bar — ports the inline block from
 /// `SwipeDeckScreen` in `screens-deck.jsx`.
@@ -52,18 +56,30 @@ class XpProgressBar extends StatelessWidget {
   final VoidCallback? onStreakTap;
 
   _XpTier get _tier {
-    for (final t in _tiers) {
-      if (xp >= t.min && xp < t.max) return t;
-    }
-    return _tiers.last;
+    final all = TierDefinitions.all;
+    final t = TierDefinitions.tierFor(xp);
+    final i = all.indexOf(t);
+    final next = i + 1 < all.length ? all[i + 1] : null;
+    return _XpTier(t.min, t.max, t.level, t.name, t.emoji, t.color,
+        _colorEnd[t.level] ?? Color.lerp(t.color, Colors.white, 0.25)!, next?.color ?? t.color,
+        next?.emoji ?? t.emoji, next?.name);
   }
 
   @override
   Widget build(BuildContext context) {
+    // Rebuild when the level ladder arrives from the database.
+    return ValueListenableBuilder<int>(
+      valueListenable: TierDefinitions.version,
+      builder: (context, _, _) => _build(context),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     final tiny = MediaQuery.sizeOf(context).height < 600;
     final tier = _tier;
     final progress = ((xp - tier.min) / (tier.max - tier.min)).clamp(0.0, 1.0);
-    final nearNext = progress > 0.85;
+    final isTop = tier.nextName == null;
+    final nearNext = !isTop && progress > 0.85;
     final almostThere = progress > 0.95;
 
     final glowSize = 4 + progress * 12;
@@ -164,7 +180,7 @@ class XpProgressBar extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '$xp/${tier.max}',
+                      isTop ? '$xp XP' : '$xp/${tier.max}',
                       style: TextStyle(
                         fontSize: tiny ? 8 : 10,
                         fontFamily: 'monospace',
@@ -276,8 +292,8 @@ class XpProgressBar extends StatelessWidget {
               const SizedBox(height: 3),
               Text(
                 almostThere
-                    ? '✨ Almost ${tier.name}!'
-                    : '${tier.max - xp} XP to ${tier.nextEmoji} ${tier.name}',
+                    ? '✨ Almost ${tier.nextName}!'
+                    : '${tier.max - xp} XP to ${tier.nextEmoji} ${tier.nextName}',
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,

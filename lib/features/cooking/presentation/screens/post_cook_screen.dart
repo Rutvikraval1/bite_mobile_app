@@ -1,22 +1,28 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../../core/config/app_config.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/badge_service.dart';
 import '../../../../core/services/image_upload_service.dart';
+import '../../../../core/services/share_service.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/state/app_state.dart';
 import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
+import '../../../../core/widgets/avatar_img.dart';
 import '../../../../core/widgets/glass.dart';
 import '../../../../core/widgets/photo_source_sheet.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../../gamification/domain/tip_selection.dart';
+import '../../../social/domain/social_models.dart';
 import '../../../social/presentation/blocs/social_feed_cubit.dart';
 import '../../domain/cook_session.dart';
 
@@ -33,7 +39,8 @@ class PostCookScreen extends StatefulWidget {
 class _PostCookScreenState extends State<PostCookScreen> {
   int? _pepperRating;
   int _tipAmount = 5;
-  bool _showTipOnPost = true;
+  bool _shared = false;
+  bool _challenging = false;
   bool _photoUploaded = false;
   XFile? _photo;
   bool _sharing = false;
@@ -44,7 +51,7 @@ class _PostCookScreenState extends State<PostCookScreen> {
   Timer? _achievementHideTimer;
   late String _finishedOnTime;
 
-  static const Map<int, int> _tipPoints = {3: 30, 5: 50, 10: 100};
+  static const List<int> _tipPresets = [3, 5, 10];
 
   @override
   void initState() {
@@ -92,7 +99,7 @@ class _PostCookScreenState extends State<PostCookScreen> {
   }
 
   int get _completedCount =>
-      1 + [_photoUploaded, _pepperRating != null, _commentController.text.trim().isNotEmpty].where((b) => b).length;
+      1 + [_photoUploaded, _pepperRating != null, _commentController.text.trim().isNotEmpty, _shared].where((b) => b).length;
 
   @override
   Widget build(BuildContext context) {
@@ -166,16 +173,18 @@ class _PostCookScreenState extends State<PostCookScreen> {
                               child: _outlineButton(
                                 icon: '📤',
                                 label: 'Share with Friend',
-                                onTap: () => context.read<FlowCubit>().setScreen(AppScreen.shareSheet),
+                                onTap: _shareWithFriend,
                               ),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
-                              child: _outlineButton(
-                                icon: '🏆',
-                                label: 'Challenge a Friend',
-                                color: AppColors.amber,
-                                onTap: () => ToastService.instance.show('🏆 Challenge sent to your friends!'),
+                              child: Builder(
+                                builder: (btnContext) => _outlineButton(
+                                  icon: '🏆',
+                                  label: 'Challenge a Friend',
+                                  color: AppColors.amber,
+                                  onTap: () => _challenge(ShareService.originOf(btnContext)),
+                                ),
                               ),
                             ),
                           ],
@@ -197,6 +206,74 @@ class _PostCookScreenState extends State<PostCookScreen> {
         ),
       ),
     );
+  }
+
+  ShareTarget get _cookTarget {
+    final session = CookSession.instance;
+    return ShareTarget(
+      kind: ShareKind.cook,
+      title: session.dishTitle,
+      subtitle: 'Cooked just now · recipe by ${session.creator}',
+      emoji: session.emoji,
+      imageUrl: session.imageUrl,
+      recipeId: session.isDrink ? null : session.recipeId,
+    );
+  }
+
+  /// Opens the share sheet for this cook (chat, feed, WhatsApp, …).
+  void _shareWithFriend() {
+    ShareSelection.instance.select(_cookTarget);
+    setState(() => _shared = true);
+    context.read<FlowCubit>().setScreen(AppScreen.shareSheet);
+  }
+
+  /// Sends a "beat my cook" challenge through the OS share sheet, with an app
+  /// link back to the recipe.
+  Future<void> _challenge(Rect? origin) async {
+    if (_challenging) return;
+    setState(() => _challenging = true);
+    final target = _cookTarget;
+    final pace = switch (_finishedOnTime) {
+      'early' => 'and finished early',
+      'ontime' => 'right on time',
+      _ => '',
+    };
+    final link = ShareService.linkFor(target, ref: 'challenge');
+    final text = '🏆 I just cooked ${target.title} on ${AppConfig.appName}${pace.isEmpty ? '' : ' $pace'} — '
+        'think you can beat me? Cook it and show me 🌶${link.isEmpty ? '' : ' $link'}';
+    final ok = await ShareService.shareNative(
+      text: text,
+      subject: 'Cooking challenge: ${target.title}',
+      origin: origin,
+    );
+    if (!mounted) return;
+    setState(() {
+      _challenging = false;
+      if (ok) _shared = true;
+    });
+    if (ok) {
+      BadgeService.instance.award(const ['first_share']);
+      ToastService.instance.show('🏆 Challenge shared!');
+    }
+  }
+
+  /// Opens the tip sheet for the recipe's creator with [_tipAmount] preselected.
+  void _sendTip(String creator, Creator? profile) {
+    TipSelection.instance.select(
+      handle: creator,
+      emoji: profile?.avatarEmoji,
+      tagline: profile?.tagline,
+      amount: _tipAmount,
+    );
+    context.read<FlowCubit>().setScreen(AppScreen.tipFlow);
+  }
+
+  Future<void> _customTip() async {
+    final amount = await showDialog<int>(
+      context: context,
+      builder: (_) => _CustomTipDialog(initial: _tipPresets.contains(_tipAmount) ? null : _tipAmount),
+    );
+    if (amount != null && mounted) setState(() => _tipAmount = amount);
   }
 
   Widget _achievementBanner() {
@@ -456,6 +533,10 @@ class _PostCookScreenState extends State<PostCookScreen> {
   }
 
   Widget _tipCard(String creator) {
+    final profile = context.select<SocialFeedCubit, Creator?>(
+      (c) => c.state.creators.where((x) => x.handle == creator.toLowerCase()).firstOrNull,
+    );
+    final custom = !_tipPresets.contains(_tipAmount);
     return Glass(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -463,17 +544,14 @@ class _PostCookScreenState extends State<PostCookScreen> {
         children: [
           Row(
             children: [
-              const CircleAvatar(
-                radius: 20,
-                backgroundColor: AppColors.coral,
-                child: Text('👩‍🍳', style: TextStyle(fontSize: 18)),
-              ),
+              AvatarImg(emoji: profile?.avatarEmoji ?? '👩‍🍳', imageUrl: profile?.avatarUrl, size: 40, borderWidth: 0),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Thank $creator!', style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                    Text('Thank ${profile?.name ?? creator}!',
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
                     const Text('Your tip supports creators', style: TextStyle(color: AppColors.muted, fontSize: 12)),
                   ],
                 ),
@@ -483,7 +561,7 @@ class _PostCookScreenState extends State<PostCookScreen> {
           const SizedBox(height: 16),
           Row(
             children: [
-              for (final amt in [3, 5, 10])
+              for (final amt in _tipPresets)
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -500,7 +578,6 @@ class _PostCookScreenState extends State<PostCookScreen> {
                           children: [
                             Text(amt == 3 ? '☕' : amt == 5 ? '🌶' : '🔥', style: const TextStyle(fontSize: 16)),
                             Text('\$$amt', style: TextStyle(color: _tipAmount == amt ? AppColors.coral : Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-                            Text('+${_tipPoints[amt]} pts', style: TextStyle(color: _tipAmount == amt ? AppColors.coral : AppColors.muted, fontSize: 11)),
                           ],
                         ),
                       ),
@@ -510,44 +587,31 @@ class _PostCookScreenState extends State<PostCookScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              GestureDetector(
-                onTap: () => ToastService.instance.show('💰 Custom tip amount...'),
-                child: const Text('custom amount', style: TextStyle(color: AppColors.coral, fontSize: 13)),
-              ),
-              const Text('10× tip = bonus pts (cap 200)', style: TextStyle(color: AppColors.muted, fontSize: 11)),
-            ],
+          GestureDetector(
+            onTap: _customTip,
+            child: Text(custom ? 'custom amount: \$$_tipAmount ✓ (change)' : 'custom amount',
+                style: const TextStyle(color: AppColors.coral, fontSize: 13)),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            decoration: BoxDecoration(border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.06)))),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Show tip on post', style: TextStyle(color: Colors.white, fontSize: 13)),
-                      Text('Others see "tipped $creator \$$_tipAmount 🌶"', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
-                    ],
-                  ),
-                ),
-                Switch(
-                  value: _showTipOnPost,
-                  activeThumbColor: Colors.white,
-                  activeTrackColor: AppColors.coral,
-                  onChanged: (v) => setState(() => _showTipOnPost = v),
-                ),
-              ],
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: () => _sendTip(creator, profile),
+            child: Container(
+              width: double.infinity,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(100),
+                color: AppColors.coral.withValues(alpha: 0.12),
+                border: Border.all(color: AppColors.coral.withValues(alpha: 0.4)),
+              ),
+              child: Text('Send \$$_tipAmount tip 🌶',
+                  style: const TextStyle(color: AppColors.coral, fontSize: 14, fontWeight: FontWeight.w700)),
             ),
           ),
           GestureDetector(
             onTap: () => context.read<FlowCubit>().setScreen(AppScreen.swipeDeck),
             child: const Padding(
-              padding: EdgeInsets.only(top: 4),
+              padding: EdgeInsets.only(top: 10),
               child: Text('Skip', style: TextStyle(color: AppColors.muted, fontSize: 13)),
             ),
           ),
@@ -562,7 +626,7 @@ class _PostCookScreenState extends State<PostCookScreen> {
       ('Photo', _photoUploaded),
       ('Rate', _pepperRating != null),
       ('Review', _commentController.text.trim().isNotEmpty),
-      ('Share', false),
+      ('Share', _shared),
     ];
     return Glass(
       padding: const EdgeInsets.all(20),
@@ -696,6 +760,69 @@ class _PostCookScreenState extends State<PostCookScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Asks for a whole-dollar tip amount (1–500).
+class _CustomTipDialog extends StatefulWidget {
+  const _CustomTipDialog({this.initial});
+
+  final int? initial;
+
+  @override
+  State<_CustomTipDialog> createState() => _CustomTipDialogState();
+}
+
+class _CustomTipDialogState extends State<_CustomTipDialog> {
+  late final TextEditingController _controller = TextEditingController(text: widget.initial?.toString() ?? '');
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final v = int.tryParse(_controller.text.trim());
+    if (v == null || v < 1 || v > 500) {
+      setState(() => _error = 'Enter a whole amount from \$1 to \$500');
+      return;
+    }
+    Navigator.of(context).pop(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.bgCard,
+      title: const Text('Custom tip', style: TextStyle(color: Colors.white, fontSize: 16)),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(3)],
+        style: const TextStyle(color: Colors.white),
+        onSubmitted: (_) => _submit(),
+        decoration: InputDecoration(
+          prefixText: '\$ ',
+          prefixStyle: const TextStyle(color: AppColors.coral),
+          hintText: 'Amount (1–500)',
+          hintStyle: const TextStyle(color: AppColors.muted),
+          errorText: _error,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel', style: TextStyle(color: AppColors.muted)),
+        ),
+        TextButton(
+          onPressed: _submit,
+          child: const Text('Set amount', style: TextStyle(color: AppColors.coral)),
+        ),
+      ],
     );
   }
 }

@@ -7,6 +7,7 @@ import '../../../../core/services/toast_service.dart';
 import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
+import '../../domain/tip_selection.dart';
 
 /// Creator-tipping bottom sheet — ports `TipFlowScreen` from
 /// `screens-misc.jsx`, satisfying `AppScreen.tipFlow`.
@@ -29,11 +30,28 @@ class TipFlowScreen extends StatefulWidget {
     this.creatorHandle = '@chefpriya',
     this.creatorEmoji = '👩‍🍳',
     this.creatorTagline = 'Mastering the art of spice',
+    this.initialAmount = 5,
   });
+
+  /// Builds the sheet for the creator picked via [TipSelection].
+  factory TipFlowScreen.fromSelection() {
+    final s = TipSelection.instance;
+    final handle = s.handle;
+    if (handle == null) return const TipFlowScreen();
+    return TipFlowScreen(
+      creatorHandle: handle,
+      creatorEmoji: s.emoji ?? '👩‍🍳',
+      creatorTagline: s.tagline ?? '',
+      initialAmount: s.amount ?? 5,
+    );
+  }
 
   final String creatorHandle;
   final String creatorEmoji;
   final String creatorTagline;
+
+  /// Preselected tip in dollars (may be a custom amount).
+  final int initialAmount;
 
   @override
   State<TipFlowScreen> createState() => _TipFlowScreenState();
@@ -43,7 +61,7 @@ class _TipFlowScreenState extends State<TipFlowScreen> {
   static const List<int> _amounts = [3, 5, 10];
   static const Map<int, String> _amountEmoji = {3: '☕', 5: '🌶', 10: '🔥'};
 
-  int _tipAmt = 5;
+  late int _tipAmt = widget.initialAmount;
   bool _sending = false;
   final TextEditingController _messageController = TextEditingController();
 

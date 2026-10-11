@@ -1,14 +1,20 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/constants/badge_catalog.dart';
 import '../../../../core/constants/tier_definitions.dart';
+import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/state/app_state.dart';
 import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/glass.dart';
+import '../../../auth/presentation/blocs/auth_cubit.dart';
+import '../../../content/domain/entities/cook_entry.dart';
+import '../../../content/presentation/blocs/content_cubit.dart';
 
 /// Full-page "expanded XP bar" — level, tier progress, badge progress,
 /// streak and the tier ladder. Ports `CookingLevelScreen` from
@@ -18,6 +24,9 @@ import '../../../../core/widgets/glass.dart';
 /// replaced with a real badge-progress section driven by
 /// [AppStateCubit.state.userBadges] + [BadgeCatalog], since this app has no
 /// per-category point tracking — everything else here reads live state.
+///
+/// "My Kitchen" is built from the user's real cook history and recipes
+/// ([ContentCubit]) plus kitchen items unlocked at each XP tier.
 class CookingLevelScreen extends StatelessWidget {
   const CookingLevelScreen({super.key});
 
@@ -152,7 +161,7 @@ class CookingLevelScreen extends StatelessWidget {
                                   Text(
                                     isMaxTier
                                         ? '${state.xp} XP — Max Level'
-                                        : '${state.xp - tier.min}/${tier.max - tier.min} pts to Level ${tier.level + 1}',
+                                        : '${state.xp} XP · ${tier.max - state.xp} to Level ${tier.level + 1}',
                                     style: TextStyle(
                                       color: AppColors.muted,
                                       fontSize: 12,
@@ -305,118 +314,10 @@ class CookingLevelScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 20),
 
-                        // ── Virtual kitchen teaser (static, matches prototype) ──
+                        // ── My Kitchen: cook stats, kitchen unlocks, recent cooks ──
                         ZoomIn(
                           duration: const Duration(milliseconds: 400),
-                          child: Glass(
-                            padding: const EdgeInsets.all(16),
-                            borderColor: AppColors.amber.withValues(alpha: 0.13),
-                            child: Column(
-                              children: [
-                                Row(
-                                  children: [
-                                    const Text('🍴',
-                                        style: TextStyle(fontSize: 24)),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            'My Kitchen — Coming Soon',
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w700,
-                                              fontFamily: 'Inter',
-                                            ),
-                                          ),
-                                          Text(
-                                            'Earn items for your virtual '
-                                            'kitchen as you level up',
-                                            style: TextStyle(
-                                              color: AppColors.muted,
-                                              fontSize: 11,
-                                              fontFamily: 'Inter',
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.amber
-                                            .withValues(alpha: 0.08),
-                                        borderRadius:
-                                            BorderRadius.circular(100),
-                                        border: Border.all(
-                                          color: AppColors.amber
-                                              .withValues(alpha: 0.2),
-                                        ),
-                                      ),
-                                      child: const Text(
-                                        '✨ New',
-                                        style: TextStyle(
-                                          color: AppColors.amber,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w600,
-                                          fontFamily: 'Inter',
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-                                Row(
-                                  children: [
-                                    for (final item in const [
-                                      ('🔪 100pts', true),
-                                      ('🍳 250pts', true),
-                                      ('🎍 500pts', false),
-                                      ('☕ 2000pts', false),
-                                    ])
-                                      Expanded(
-                                        child: Container(
-                                          margin:
-                                              const EdgeInsets.symmetric(
-                                                  horizontal: 2),
-                                          padding: const EdgeInsets.symmetric(
-                                              vertical: 6, horizontal: 4),
-                                          decoration: BoxDecoration(
-                                            color: item.$2
-                                                ? const Color(0x144CAF50)
-                                                : Colors.white
-                                                    .withValues(alpha: 0.03),
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                            border: Border.all(
-                                              color: item.$2
-                                                  ? const Color(0x264CAF50)
-                                                  : Colors.white
-                                                      .withValues(alpha: 0.04),
-                                            ),
-                                          ),
-                                          alignment: Alignment.center,
-                                          child: Text(
-                                            item.$1,
-                                            style: TextStyle(
-                                              color: item.$2
-                                                  ? const Color(0xFF4CAF50)
-                                                  : AppColors.muted,
-                                              fontSize: 10,
-                                              fontFamily: 'Inter',
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
+                          child: _MyKitchenPanel(xp: state.xp),
                         ),
                         const SizedBox(height: 20),
 
@@ -555,4 +456,338 @@ class CookingLevelScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A kitchen item unlocked when the user reaches [tierLevel].
+typedef _KitchenItem = ({int tierLevel, String emoji, String name});
+
+/// "My Kitchen" — cook stats, kitchen items unlocked by XP tier and the
+/// most recent cooks, all from live state.
+class _MyKitchenPanel extends StatelessWidget {
+  const _MyKitchenPanel({required this.xp});
+
+  final int xp;
+
+  static const List<_KitchenItem> _items = [
+    (tierLevel: 2, emoji: '🥄', name: 'Wooden Spoon'),
+    (tierLevel: 3, emoji: '🍳', name: 'Cast-Iron Pan'),
+    (tierLevel: 4, emoji: '🔪', name: "Chef's Knife"),
+    (tierLevel: 5, emoji: '🍲', name: 'Dutch Oven'),
+    (tierLevel: 6, emoji: '🥘', name: 'Copper Set'),
+    (tierLevel: 7, emoji: '🔥', name: 'Wood-Fired Oven'),
+  ];
+
+  static XpTier? _tier(int level) {
+    for (final t in TierDefinitions.all) {
+      if (t.level == level) return t;
+    }
+    return null;
+  }
+
+  static String _ago(DateTime d) {
+    final diff = DateTime.now().difference(d);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${d.month}/${d.day}/${d.year % 100}';
+  }
+
+  void _openCook(BuildContext context, CookEntry entry) {
+    final id = entry.recipeId;
+    final card = id == null
+        ? null
+        : context.read<ContentCubit>().state.findCard(id);
+    if (card == null) return;
+    context.read<AppStateCubit>().viewRecipe(card);
+    context.read<FlowCubit>().setScreen(AppScreen.recipeDetail);
+  }
+
+  void _startCooking(BuildContext context) {
+    final appState = context.read<AppStateCubit>();
+    appState.setSubTab(DeckTab.food);
+    appState.setActiveCardIndex(0);
+    context.read<FlowCubit>().setScreen(AppScreen.swipeDeck);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final content = context.watch<ContentCubit>().state;
+    final cooks = content.cookHistory;
+    // History is capped at 100 rows; the profile counter covers the rest.
+    final profileCooked = context.select<AuthCubit, int>(
+      (c) => c.state.profile?.cookedCount ?? 0,
+    );
+    final cookedTotal = max(cooks.length, profileCooked);
+    final published = content.publishedRecipes.length;
+    final rated = [for (final c in cooks) ?c.rating];
+    final avgRating = rated.isEmpty
+        ? null
+        : rated.reduce((a, b) => a + b) / rated.length;
+    final now = DateTime.now();
+    final thisWeek = cooks
+        .where((c) => now.difference(c.cookedAt).inDays < 7)
+        .length;
+    final unlocked = _items.where((i) {
+      final t = _tier(i.tierLevel);
+      return t != null && xp >= t.min;
+    }).length;
+    _KitchenItem? next;
+    for (final i in _items) {
+      final t = _tier(i.tierLevel);
+      if (t != null && xp < t.min) {
+        next = i;
+        break;
+      }
+    }
+    final nextTier = next == null ? null : _tier(next.tierLevel);
+
+    return Glass(
+      padding: const EdgeInsets.all(16),
+      borderColor: AppColors.amber.withValues(alpha: 0.13),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('🍴', style: TextStyle(fontSize: 24)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'My Kitchen',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
+                    Text(
+                      next == null || nextTier == null
+                          ? 'Every kitchen item unlocked — legendary!'
+                          : '${nextTier.min - xp} XP until your '
+                                '${next.emoji} ${next.name}',
+                      style: TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.amber.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(100),
+                  border: Border.all(
+                    color: AppColors.amber.withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Text(
+                  '$unlocked/${_items.length}',
+                  style: const TextStyle(
+                    color: AppColors.amber,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Inter',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // ── Cook stats ──
+          Row(
+            children: [
+              _stat('$cookedTotal', 'Cooked'),
+              _stat('$thisWeek', 'This week'),
+              _stat('$published', 'Recipes'),
+              _stat(
+                avgRating == null ? '–' : '★ ${avgRating.toStringAsFixed(1)}',
+                'Avg rating',
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // ── Kitchen items unlocked by tier ──
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final item in _items)
+                Builder(
+                  builder: (context) {
+                    final tier = _tier(item.tierLevel);
+                    final has = tier != null && xp >= tier.min;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 6,
+                        horizontal: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: has
+                            ? const Color(0x144CAF50)
+                            : Colors.white.withValues(alpha: 0.03),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: has
+                              ? const Color(0x264CAF50)
+                              : Colors.white.withValues(alpha: 0.04),
+                        ),
+                      ),
+                      child: Text(
+                        has
+                            ? '${item.emoji} ${item.name}'
+                            : '🔒 ${tier?.min ?? '?'} XP',
+                        style: TextStyle(
+                          color: has ? const Color(0xFF4CAF50) : AppColors.muted,
+                          fontSize: 10,
+                          fontFamily: 'Inter',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // ── Recent cooks ──
+          Text(
+            'RECENT COOKS',
+            style: TextStyle(
+              color: AppColors.muted,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1,
+              fontFamily: 'Inter',
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (content.profileLoading && cooks.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppColors.amber,
+                  ),
+                ),
+              ),
+            )
+          else if (cooks.isEmpty)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _startCooking(context),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'No cooks yet — pick a recipe and hit Cook to fill '
+                      'your kitchen.',
+                      style: TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Find a recipe →',
+                    style: TextStyle(
+                      color: AppColors.coral,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            for (final c in cooks.take(3))
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _openCook(context, c),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Row(
+                    children: [
+                      Text(c.emoji, style: const TextStyle(fontSize: 18)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          c.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                      ),
+                      if (c.rating != null) ...[
+                        Text(
+                          '★' * c.rating!,
+                          style: const TextStyle(
+                            color: AppColors.amber,
+                            fontSize: 10,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Text(
+                        _ago(c.cookedAt),
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11,
+                          fontFamily: 'Inter',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  static Widget _stat(String value, String label) => Expanded(
+    child: Column(
+      children: [
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            fontFamily: 'Inter',
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(
+            color: AppColors.muted,
+            fontSize: 10,
+            fontFamily: 'Inter',
+          ),
+        ),
+      ],
+    ),
+  );
 }

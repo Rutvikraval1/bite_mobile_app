@@ -4,17 +4,26 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/premium_gate_service.dart';
+import '../../../../core/services/share_service.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/state/app_state.dart';
 import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/app_states.dart';
+import '../../../../core/services/image_upload_service.dart';
+import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../cooking/data/cook_data.dart';
+import '../../../cooking/data/grocery_services.dart';
+import '../../../cooking/domain/cook_plan.dart';
 import '../../../cooking/domain/cook_session.dart';
+import '../../../../core/utils/formatters.dart';
+import '../../data/repositories/recipe_likes_repository.dart';
 import '../../domain/entities/bite_card.dart';
+import '../../domain/repositories/content_repository.dart';
+import '../../../social/presentation/social_navigation.dart';
 import '../blocs/content_cubit.dart';
-import '../widgets/social_comments_block.dart';
+import '../widgets/recipe_comments_block.dart';
 import '../../../../core/widgets/app_network_image.dart';
 import '../widgets/sheet_backdrop_blur.dart';
 
@@ -29,8 +38,21 @@ class RecipeDetailScreen extends StatefulWidget {
 
 class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   String _activeTab = 'ingredients';
+  final RecipeLikesRepository _likes = RecipeLikesRepository();
+
+  /// "type-id" of the item whose like state is loaded; reloaded when the
+  /// screen switches to a different recipe.
+  String? _likeKey;
   bool _liked = false;
-  bool _saved = false;
+
+  /// Like state as loaded from the DB — the shown count is the stored
+  /// hearts plus the user's change since then.
+  bool _likedAtLoad = false;
+
+  /// Live `hearts_count` read alongside the like state.
+  String? _heartsAtLoad;
+  bool _likePending = false;
+  bool _savePending = false;
   int? _servings;
   final Set<int> _checkedIngs = {};
   final Set<int> _completedSteps = {};
@@ -38,11 +60,19 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   final List<SideDish> _addedSides = [];
   String _sidesTab = 'picks';
 
+  /// True while the signed-in user is viewing a recipe they created: the
+  /// page is view-only (no like/save/cook/order/comment input) and shows
+  /// Edit / Delete instead. Recomputed every build.
+  bool _ownRecipe = false;
+  bool _deleting = false;
+
   @override
   Widget build(BuildContext context) {
     // Only rebuild for the two AppState fields this screen reads (not on
     // every XP / coin / flag change).
-    final subTab = context.select<AppStateCubit, DeckTab>((c) => c.state.subTab);
+    final subTab = context.select<AppStateCubit, DeckTab>(
+      (c) => c.state.subTab,
+    );
     final activeCardIndex = context.select<AppStateCubit, int>(
       (c) => c.state.activeCardIndex,
     );
@@ -50,52 +80,64 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       (c) => c.state.selectedRecipe,
     );
     final content = context.watch<ContentCubit>().state;
-    final deck = subTab == DeckTab.drinks
-        ? content.drinks
-        : content.recipes;
-    final card = selected ??
-        (deck.isEmpty ? null : deck[activeCardIndex % deck.length]);
+    final deck = subTab == DeckTab.drinks ? content.drinks : content.recipes;
+    final card =
+        selected ?? (deck.isEmpty ? null : deck[activeCardIndex % deck.length]);
 
     if (card == null) {
       return ColoredBox(
         color: const Color(0xB3000000),
         child: content.loading
-            ? const LoadingState(label: 'Loading recipe…', backgroundColor: Colors.transparent)
+            ? const LoadingState(
+                label: 'Loading recipe…',
+                backgroundColor: Colors.transparent,
+              )
             : content.error != null
-                ? ErrorState(
-                    message: content.error!,
-                    backgroundColor: Colors.transparent,
-                    onRetry: () => context.read<ContentCubit>().refetch(),
-                  )
-                : const EmptyState(
-                    emoji: '🍽',
-                    title: 'No recipe to show',
-                    message: 'Check back soon for new recipes.',
-                  ),
+            ? ErrorState(
+                message: content.error!,
+                backgroundColor: Colors.transparent,
+                onRetry: () => context.read<ContentCubit>().refetch(),
+              )
+            : const EmptyState(
+                emoji: '🍽',
+                title: 'No recipe to show',
+                message: 'Check back soon for new recipes.',
+              ),
       );
     }
 
     final isDrink = selected == null && subTab == DeckTab.drinks;
+    final myId = context.select<AuthCubit, String?>((c) => c.state.user?.id);
+    _ownRecipe =
+        !isDrink &&
+        myId != null &&
+        card.authorId != null &&
+        card.authorId == myId;
     final themeColor = isDrink ? AppColors.drinksBlue : AppColors.coral;
-    // User-created recipes carry their own ingredients/steps.
-    final hasOwn = card.ingredients.isNotEmpty || card.steps.isNotEmpty;
-    final baseServings = hasOwn && card.serves > 0
-        ? card.serves
-        : isDrink
-            ? CookData.baseServingsDrink
-            : CookData.baseServingsFood;
+    // Only the recipe's own ingredients/steps are shown — catalog items
+    // without them get an honest empty state, not a generic template.
+    final baseServings = _baseServings(card, isDrink);
     _servings ??= baseServings;
     final servings = _servings!;
-    final ingredients = card.ingredients.isNotEmpty
-        ? card.ingredients.map(_parseIngredient).toList()
-        : isDrink
-            ? CookData.drinkIngredients
-            : CookData.foodIngredients;
-    final steps = card.steps.isNotEmpty
-        ? [for (final s in card.steps) CookStepDef(s)]
-        : isDrink
-            ? CookData.drinkDetailSteps
-            : CookData.foodDetailSteps;
+    final ingredients = [
+      for (final line in card.ingredients)
+        if (line.trim().isNotEmpty) _parseIngredient(line),
+    ];
+    final steps = CookPlan.toDetailSteps(card.steps);
+    final itemType = isDrink ? 'drink' : 'recipe';
+    _ensureLikeLoaded(itemType, card.id);
+    final heartsShown = Formatters.compact(
+      (Formatters.numOf(_heartsAtLoad ?? card.hearts) +
+              (_liked ? 1 : 0) -
+              (_likedAtLoad ? 1 : 0))
+          .round()
+          .clamp(0, 1 << 31),
+    );
+    final isSaved = context.select<ContentCubit, bool>(
+      (c) => c.state.savedItems.any(
+        (s) => s.itemType == itemType && s.itemId == card.id,
+      ),
+    );
 
     return Material(
       color: Colors.black.withValues(alpha: 0.6),
@@ -156,61 +198,40 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                                           const SizedBox(height: 16),
                                           _statsRow(card, isDrink),
                                           const SizedBox(height: 8),
-                                          SocialCommentsBlock(
-                                            hearts: card.hearts,
+                                          RecipeCommentsBlock(
+                                            key: ValueKey(
+                                              '$itemType-${card.id}',
+                                            ),
+                                            itemType: itemType,
+                                            itemId: card.id,
+                                            hearts: heartsShown,
                                             saved: card.saved,
+                                            initialCount: card.comments,
                                             accentColor: themeColor,
-                                            baseCommentCount: 4,
+                                            readOnly: _ownRecipe,
                                             quickChips: const [
                                               '🔥 Fire!',
                                               '😍 Love this!',
-                                              'Need recipe!',
                                               '💯 Amazing',
                                               'Saving this',
-                                            ],
-                                            seedComments: const [
-                                              SeedComment(
-                                                user: '@noodlequeen',
-                                                avatarEmoji: '🍜',
-                                                text:
-                                                    'This looks incredible! 🔥',
-                                                time: '2m',
-                                                likes: 12,
-                                              ),
-                                              SeedComment(
-                                                user: '@marco.eats',
-                                                avatarEmoji: '🍄',
-                                                text: 'Need the recipe ASAP!',
-                                                time: '8m',
-                                                likes: 5,
-                                              ),
-                                              SeedComment(
-                                                user: '@sarah_bakes',
-                                                avatarEmoji: '🍰',
-                                                text:
-                                                    'The plating is gorgeous 😍',
-                                                time: '15m',
-                                                likes: 8,
-                                              ),
-                                              SeedComment(
-                                                user: '@bangkokbites',
-                                                avatarEmoji: '🍗',
-                                                text:
-                                                    "Reminds me of my grandma's version",
-                                                time: '1h',
-                                                likes: 3,
-                                              ),
+                                              'Making this tonight',
                                             ],
                                           ),
                                           const SizedBox(height: 20),
-                                          _actionRow(
-                                            card,
-                                            isDrink,
-                                            themeColor,
-                                            ingredients,
-                                          ),
-                                          const SizedBox(height: 12),
-                                          _addSidesButton(themeColor),
+                                          if (_ownRecipe)
+                                            _ownerActionRow(card)
+                                          else ...[
+                                            _actionRow(
+                                              card,
+                                              isDrink,
+                                              themeColor,
+                                              ingredients,
+                                              steps,
+                                              isSaved,
+                                            ),
+                                            const SizedBox(height: 12),
+                                            _addSidesButton(themeColor),
+                                          ],
                                           if (_addedSides.isNotEmpty) ...[
                                             const SizedBox(height: 12),
                                             _addedSidesPills(),
@@ -332,8 +353,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
 
   Widget _creatorRow(BiteCard card, bool isDrink, Color themeColor) {
     return GestureDetector(
-      onTap: () =>
-          context.read<FlowCubit>().setScreen(AppScreen.creatorProfile),
+      onTap: () => openCreator(context, card.creator),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -397,66 +417,67 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     bool isDrink,
     Color themeColor,
     List<CookIngredient> ingredients,
+    List<CookStepDef> steps,
+    bool isSaved,
   ) {
+    final canCook = steps.isNotEmpty;
     return Row(
       children: [
         _circleToggle(
           icon: Icons.favorite_rounded,
           active: _liked,
           color: AppColors.coral,
-          onTap: () => setState(() => _liked = !_liked),
+          onTap: () => _toggleLike(isDrink ? 'drink' : 'recipe', card.id),
         ),
         const SizedBox(width: 10),
         _circleToggle(
           icon: Icons.bookmark_rounded,
-          active: _saved,
+          active: isSaved,
           color: AppColors.amber,
-          onTap: () {
-            setState(() => _saved = !_saved);
-            if (_saved) {
-              context.read<ContentCubit>().saveItem(
-                card,
-                isDrink ? 'drink' : 'recipe',
-              );
-            }
-          },
+          onTap: () => _toggleSave(card, isDrink, isSaved),
         ),
         const SizedBox(width: 10),
         _circleToggle(
           icon: Icons.ios_share_rounded,
           active: false,
           color: Colors.white,
-          onTap: () =>
-              context.read<FlowCubit>().setScreen(AppScreen.shareSheet),
+          onTap: () {
+            ShareSelection.instance.select(ShareTarget.card(card));
+            context.read<FlowCubit>().setScreen(AppScreen.shareSheet);
+          },
         ),
         const SizedBox(width: 10),
         Expanded(
           child: GestureDetector(
-            onTap: () => _attemptCook(card, isDrink, themeColor, ingredients),
-            child: Container(
-              height: 48,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(100),
-                gradient: LinearGradient(
-                  colors: [
-                    themeColor,
-                    isDrink ? AppColors.cyan : AppColors.amber,
+            onTap: () =>
+                _attemptCook(card, isDrink, themeColor, ingredients, steps),
+            child: Opacity(
+              opacity: canCook ? 1 : 0.4,
+              child: Container(
+                height: 48,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(100),
+                  gradient: LinearGradient(
+                    colors: [
+                      themeColor,
+                      isDrink ? AppColors.cyan : AppColors.amber,
+                    ],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: themeColor.withValues(alpha: 0.33),
+                      blurRadius: 20,
+                    ),
                   ],
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: themeColor.withValues(alpha: 0.33),
-                    blurRadius: 20,
+                alignment: Alignment.center,
+                child: Text(
+                  isDrink ? '🍸 Mix Now' : '🍳 Cook Now',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
                   ),
-                ],
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                isDrink ? '🍸 Mix Now' : '🍳 Cook Now',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
                 ),
               ),
             ),
@@ -465,6 +486,258 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       ],
     );
   }
+
+  /// Owner view of their own recipe: Share, Edit and Delete only.
+  Widget _ownerActionRow(BiteCard card) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(
+              Icons.visibility_outlined,
+              size: 14,
+              color: AppColors.muted,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                card.isDraft
+                    ? 'Your draft · only you can see it'
+                    : 'Your recipe · view only',
+                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            if (!card.isDraft) ...[
+              _circleToggle(
+                icon: Icons.ios_share_rounded,
+                active: false,
+                color: Colors.white,
+                onTap: () {
+                  ShareSelection.instance.select(ShareTarget.card(card));
+                  context.read<FlowCubit>().setScreen(AppScreen.shareSheet);
+                },
+              ),
+              const SizedBox(width: 10),
+            ],
+            _circleToggle(
+              icon: Icons.delete_outline_rounded,
+              active: false,
+              color: AppColors.coral,
+              onTap: _deleting ? () {} : () => _confirmDelete(card),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: GestureDetector(
+                onTap: _deleting
+                    ? null
+                    : () {
+                        context.read<AppStateCubit>().editRecipe(card);
+                        context.read<FlowCubit>().setScreen(
+                          AppScreen.creatorCreate,
+                        );
+                      },
+                child: Container(
+                  height: 48,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(100),
+                    gradient: const LinearGradient(
+                      colors: [AppColors.coral, AppColors.amber],
+                    ),
+                  ),
+                  child: Text(
+                    _deleting ? 'Deleting…' : '✏️ Edit Recipe',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmDelete(BiteCard card) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.8),
+      builder: (ctx) => _AlertShell(
+        accentColor: AppColors.coral,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('🗑', style: TextStyle(fontSize: 36)),
+            const SizedBox(height: 8),
+            const Text(
+              'Delete this recipe?',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '"${card.title}" and its comments will be removed for everyone. This can\'t be undone.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 13,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: _pillButton(
+                    label: 'Cancel',
+                    background: Colors.transparent,
+                    textColor: AppColors.muted,
+                    border: Colors.white.withValues(alpha: 0.12),
+                    onTap: () => Navigator.pop(ctx, false),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _pillButton(
+                    label: 'Delete',
+                    background: AppColors.coral,
+                    textColor: Colors.white,
+                    onTap: () => Navigator.pop(ctx, true),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
+    final result = await context.read<ContentCubit>().deleteRecipe(card.id);
+    if (!mounted) return;
+    setState(() => _deleting = false);
+    if (!result.isSuccess) {
+      ToastService.instance.show("⚠️ Couldn't delete recipe: ${result.error}");
+      return;
+    }
+    final image = card.image;
+    if (image != null && image.isNotEmpty) {
+      ImageUploadService.instance.deleteByUrl(ImageBuckets.recipeImages, image);
+    }
+    ToastService.instance.show('🗑 Recipe deleted');
+    context.read<FlowCubit>().goBack();
+  }
+
+  /// Loads whether the user already liked this item (once per item).
+  void _ensureLikeLoaded(String itemType, int itemId) {
+    final key = '$itemType-$itemId';
+    if (_likeKey == key) return;
+    _likeKey = key;
+    _liked = false;
+    _likedAtLoad = false;
+    _heartsAtLoad = null;
+    final userId = _likes.currentUserId;
+    if (userId == null) return;
+    (
+          _likes.isLiked(userId, itemType, itemId),
+          _likes.fetchHearts(itemType, itemId),
+        ).wait
+        .then((r) {
+          final (liked, hearts) = r;
+          if (!mounted || _likeKey != key) return;
+          setState(() {
+            _liked = liked;
+            _likedAtLoad = liked;
+            _heartsAtLoad = hearts;
+          });
+        })
+        .catchError((Object e) {
+          debugPrint('[recipe-likes] load failed: $e');
+        });
+  }
+
+  /// Optimistic like / unlike via `recipe_likes`; reverted on failure.
+  Future<void> _toggleLike(String itemType, int itemId) async {
+    if (_likePending) return;
+    final userId = _likes.currentUserId;
+    if (userId == null) {
+      ToastService.instance.show('⚠️ Sign in to like recipes.');
+      return;
+    }
+    final key = '$itemType-$itemId';
+    final liked = !_liked;
+    setState(() {
+      _liked = liked;
+      _likePending = true;
+    });
+    try {
+      if (liked) {
+        await _likes.like(userId, itemType, itemId);
+      } else {
+        await _likes.unlike(userId, itemType, itemId);
+      }
+    } catch (e) {
+      debugPrint('[recipe-likes] toggle failed: $e');
+      if (mounted && _likeKey == key) setState(() => _liked = !liked);
+      ToastService.instance.show(
+        RecipeLikesRepository.isMissingTable(e)
+            ? '⚠️ Likes are not set up on the server yet.'
+            : "⚠️ Couldn't update like. Try again.",
+      );
+    } finally {
+      if (mounted) setState(() => _likePending = false);
+    }
+  }
+
+  /// Saves / unsaves via `saved_items`; the bookmark reflects the real
+  /// saved list in [ContentCubit].
+  Future<void> _toggleSave(BiteCard card, bool isDrink, bool isSaved) async {
+    if (_savePending) return;
+    final cubit = context.read<ContentCubit>();
+    final itemType = isDrink ? 'drink' : 'recipe';
+    setState(() => _savePending = true);
+    final ContentWriteResult result;
+    if (isSaved) {
+      final row = cubit.state.savedItems
+          .where((s) => s.itemType == itemType && s.itemId == card.id)
+          .firstOrNull;
+      result = row == null
+          ? const ContentWriteResult.ok()
+          : await cubit.removeSavedItem(row.id);
+    } else {
+      result = await cubit.saveItem(card, itemType);
+    }
+    if (!mounted) return;
+    setState(() => _savePending = false);
+    if (!result.isSuccess) {
+      ToastService.instance.show(
+        isSaved
+            ? "⚠️ Couldn't unsave. Try again."
+            : "⚠️ Couldn't save. Try again.",
+      );
+    } else {
+      ToastService.instance.show(isSaved ? 'Removed from Saved' : '🔖 Saved!');
+    }
+  }
+
+  int _baseServings(BiteCard card, bool isDrink) => card.serves > 0
+      ? card.serves
+      : isDrink
+      ? CookData.baseServingsDrink
+      : CookData.baseServingsFood;
 
   Widget _circleToggle({
     required IconData icon,
@@ -609,8 +882,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
   /// "2 cups rice" → qty 2, unit "cups", name "rice". Falls back to the
   /// whole line as the name when there's no leading quantity.
   static CookIngredient _parseIngredient(String line) {
-    final m = RegExp(r'^\s*(\d+(?:[.,]\d+)?|\d+/\d+)\s*([a-zA-Z]+\.?)?\s+(.+)$')
-        .firstMatch(line);
+    final m = RegExp(
+      r'^\s*(\d+(?:[.,]\d+)?|\d+/\d+)\s*([a-zA-Z]+\.?)?\s+(.+)$',
+    ).firstMatch(line);
     if (m == null) return CookIngredient(0, '', line.trim());
     final raw = m.group(1)!.replaceAll(',', '.');
     final double qty;
@@ -622,11 +896,28 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       qty = double.parse(raw);
     }
     const units = {
-      'g', 'kg', 'ml', 'l', 'oz', 'lb', 'lbs', 'cup', 'cups', 'tsp', 'tbsp',
-      'pinch', 'clove', 'cloves', 'slice', 'slices', 'can', 'cans',
+      'g',
+      'kg',
+      'ml',
+      'l',
+      'oz',
+      'lb',
+      'lbs',
+      'cup',
+      'cups',
+      'tsp',
+      'tbsp',
+      'pinch',
+      'clove',
+      'cloves',
+      'slice',
+      'slices',
+      'can',
+      'cans',
     };
     final unit = m.group(2);
-    if (unit != null && units.contains(unit.toLowerCase().replaceAll('.', ''))) {
+    if (unit != null &&
+        units.contains(unit.toLowerCase().replaceAll('.', ''))) {
       return CookIngredient(qty, unit, m.group(3)!.trim());
     }
     return CookIngredient(qty, '', '${unit ?? ''} ${m.group(3)!}'.trim());
@@ -658,6 +949,15 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       }
     }
     final totalUnchecked = unchecked.length + sideUnchecked.length;
+
+    if (ingredients.isEmpty && _addedSides.isEmpty) {
+      return _emptyTabState(
+        emoji: '🧾',
+        title: 'Ingredients not available yet',
+        message:
+            "This ${isDrink ? 'drink' : 'recipe'} doesn't have an ingredient list yet.",
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -722,11 +1022,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: _ingredientRow(
-              label: CookData.formatIngredient(
-                ingredients[i],
-                baseServings,
-                servings,
-              ),
+              label: ingredients[i].qty > 0
+                  ? '${ingredients[i].unit} ${ingredients[i].name}'.trim()
+                  : ingredients[i].name,
               qtyLabel: ingredients[i].qty > 0
                   ? CookData.scaleQty(
                       ingredients[i].qty,
@@ -763,7 +1061,9 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           const SizedBox(height: 10),
           for (final side in _addedSides) _sideIngredientGroup(side),
         ],
-        if (totalUnchecked == 0)
+        if (_ownRecipe)
+          const SizedBox.shrink()
+        else if (totalUnchecked == 0)
           Container(
             margin: const EdgeInsets.only(top: 8),
             padding: const EdgeInsets.symmetric(vertical: 10),
@@ -788,7 +1088,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
             padding: const EdgeInsets.only(top: 8),
             child: GestureDetector(
               onTap: () =>
-                  _openOrderPicker(card, isDrink, themeColor, ingredients),
+                  _openOrderPicker(card, _missingItemNames(ingredients)),
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(
@@ -819,7 +1119,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                           Text(
                             _addedSides.isNotEmpty
                                 ? 'Main dish + ${_addedSides.length} side${_addedSides.length > 1 ? 's' : ''}'
-                                : 'Instacart · Walmart · Amazon',
+                                : 'Search on Instacart · Walmart · Amazon',
                             style: const TextStyle(
                               color: Color(0x73FFFFFF),
                               fontSize: 11,
@@ -1074,6 +1374,15 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     List<CookStepDef> steps,
     List<CookIngredient> ingredients,
   ) {
+    if (steps.isEmpty) {
+      return _emptyTabState(
+        emoji: isDrink ? '🍸' : '📝',
+        title:
+            'Steps not available for this ${isDrink ? 'drink' : 'recipe'} yet',
+        message:
+            '${isDrink ? 'Mix' : 'Cook'} Mode needs step-by-step instructions, so it\'s off for this one.',
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1102,37 +1411,39 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         const SizedBox(height: 16),
         for (var i = 0; i < steps.length; i++) _stepRow(i, steps[i]),
         const SizedBox(height: 8),
-        GestureDetector(
-          onTap: () => _attemptCook(card, isDrink, themeColor, ingredients),
-          child: Container(
-            width: double.infinity,
-            height: 52,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(100),
-              gradient: LinearGradient(
-                colors: [
-                  themeColor,
-                  isDrink ? AppColors.cyan : AppColors.amber,
+        if (!_ownRecipe)
+          GestureDetector(
+            onTap: () =>
+                _attemptCook(card, isDrink, themeColor, ingredients, steps),
+            child: Container(
+              width: double.infinity,
+              height: 52,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(100),
+                gradient: LinearGradient(
+                  colors: [
+                    themeColor,
+                    isDrink ? AppColors.cyan : AppColors.amber,
+                  ],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: themeColor.withValues(alpha: 0.33),
+                    blurRadius: 24,
+                  ),
                 ],
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: themeColor.withValues(alpha: 0.33),
-                  blurRadius: 24,
+              alignment: Alignment.center,
+              child: Text(
+                isDrink ? '🍸 Enter Mix Mode' : '👨‍🍳 Enter Cook Mode',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16,
                 ),
-              ],
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              isDrink ? '🍸 Enter Mix Mode' : '👨‍🍳 Enter Cook Mode',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: 16,
               ),
             ),
           ),
-        ),
         const SizedBox(height: 10),
         const Center(
           child: Text(
@@ -1141,6 +1452,47 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _emptyTabState({
+    required String emoji,
+    required String title,
+    required String message,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+      decoration: BoxDecoration(
+        color: AppColors.glass,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.glassBorder),
+      ),
+      child: Column(
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 32)),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1248,7 +1600,14 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     bool isDrink,
     Color themeColor,
     List<CookIngredient> ingredients,
+    List<CookStepDef> steps,
   ) {
+    if (steps.isEmpty) {
+      ToastService.instance.show(
+        '📝 Steps not available for this ${isDrink ? 'drink' : 'recipe'} yet',
+      );
+      return;
+    }
     final unchecked = [
       for (var i = 0; i < ingredients.length; i++)
         if (!_checkedIngs.contains(i)) i,
@@ -1262,11 +1621,17 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
         unchecked,
       );
     } else {
-      _goToCookMode(card, isDrink);
+      _goToCookMode(card, isDrink, ingredients);
     }
   }
 
-  void _goToCookMode(BiteCard card, bool isDrink) {
+  void _goToCookMode(
+    BiteCard card,
+    bool isDrink,
+    List<CookIngredient> ingredients,
+  ) {
+    final baseServings = _baseServings(card, isDrink);
+    final servings = _servings ?? baseServings;
     CookSession.instance
       ..dishTitle = card.title
       ..creator = card.creator
@@ -1275,7 +1640,46 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
       ..recipeId = isDrink ? null : card.id
       ..emoji = card.emoji
       ..imageUrl = card.image;
+    CookPlan.instance
+      ..steps = List.unmodifiable(card.steps)
+      ..ingredients = [
+        for (final ing in ingredients)
+          CookData.formatIngredient(ing, baseServings, servings),
+      ]
+      ..checkedIngredients = Set.unmodifiable(_checkedIngs)
+      ..sides = List.unmodifiable(_addedSides)
+      ..targetMinutes = _targetMinutes(card);
     context.read<FlowCubit>().setScreen(AppScreen.cookMode);
+  }
+
+  /// Prep + cook minutes when the author entered them, else the first
+  /// number in the display time ("25 min"), else 25.
+  static int _targetMinutes(BiteCard card) {
+    final total = (card.prepMin ?? 0) + (card.cookMin ?? 0);
+    if (total > 0) return total;
+    final t = card.time.toLowerCase();
+    final h = RegExp(r'(\d+)\s*(?:h|hr|hrs|hour|hours)\b').firstMatch(t);
+    final m = RegExp(r'(\d+)\s*(?:m|min|mins|minute|minutes)\b').firstMatch(t);
+    var minutes =
+        (h == null ? 0 : int.parse(h.group(1)!) * 60) +
+        (m == null ? 0 : int.parse(m.group(1)!));
+    if (minutes == 0) {
+      minutes = int.tryParse(RegExp(r'\d+').stringMatch(t) ?? '') ?? 0;
+    }
+    return minutes > 0 ? minutes : 25;
+  }
+
+  /// Names of everything still unchecked — main dish + added sides — for a
+  /// grocery search.
+  List<String> _missingItemNames(List<CookIngredient> ingredients) {
+    return [
+      for (var i = 0; i < ingredients.length; i++)
+        if (!_checkedIngs.contains(i)) ingredients[i].name,
+      for (final side in _addedSides)
+        for (var i = 0; i < side.ingredients.length; i++)
+          if (!_checkedSideIngs.contains('${side.name}-$i'))
+            side.ingredients[i],
+    ];
   }
 
   void _showMissingIngredientsDialog(
@@ -1285,12 +1689,8 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     List<CookIngredient> ingredients,
     List<int> unchecked,
   ) {
-    final servings =
-        _servings ??
-        (isDrink ? CookData.baseServingsDrink : CookData.baseServingsFood);
-    final baseServings = isDrink
-        ? CookData.baseServingsDrink
-        : CookData.baseServingsFood;
+    final baseServings = _baseServings(card, isDrink);
+    final servings = _servings ?? baseServings;
     final preview = unchecked
         .take(3)
         .map(
@@ -1337,7 +1737,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
               textColor: const Color(0xFF66BB6A),
               onTap: () {
                 Navigator.pop(ctx);
-                _openOrderPicker(card, isDrink, themeColor, ingredients);
+                _openOrderPicker(card, _missingItemNames(ingredients));
               },
             ),
             const SizedBox(height: 10),
@@ -1361,91 +1761,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                     textColor: Colors.white,
                     onTap: () {
                       Navigator.pop(ctx);
-                      _goToCookMode(card, isDrink);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showReadyToCookDialog(
-    BiteCard card,
-    bool isDrink,
-    Color themeColor,
-    int ingredientCount,
-  ) {
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.8),
-      builder: (ctx) => _AlertShell(
-        accentColor: const Color(0xFF4CAF50),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 64,
-              height: 64,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0x1F4CAF50),
-                border: Border.all(color: const Color(0x4D4CAF50), width: 2),
-              ),
-              child: Text(
-                isDrink ? '🍸' : '🍳',
-                style: const TextStyle(fontSize: 32),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              isDrink ? 'Ready to Mix?' : 'Ready to Cook?',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'All ingredients ordered & checked off',
-              style: TextStyle(color: AppColors.muted, fontSize: 13),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '✅ $ingredientCount/$ingredientCount ingredients ready',
-              style: const TextStyle(
-                color: Color(0xFF4CAF50),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: _pillButton(
-                    label: 'Not Yet',
-                    background: Colors.transparent,
-                    textColor: AppColors.muted,
-                    border: Colors.white.withValues(alpha: 0.12),
-                    onTap: () => Navigator.pop(ctx),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child: _pillButton(
-                    label: isDrink ? "Let's Mix! 🍸" : "Let's Cook! 🔥",
-                    background: themeColor,
-                    textColor: Colors.white,
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _goToCookMode(card, isDrink);
+                      _goToCookMode(card, isDrink, ingredients);
                     },
                   ),
                 ),
@@ -1486,56 +1802,25 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
     );
   }
 
-  void _openOrderPicker(
-    BiteCard card,
-    bool isDrink,
-    Color themeColor,
-    List<CookIngredient> ingredients,
-  ) {
+  /// Lets the user pick a grocery service, then opens its search for the
+  /// missing items. Nothing is ordered in-app, so nothing is auto-checked.
+  void _openOrderPicker(BiteCard card, List<String> missing) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
-        const services = [
-          (
-            key: 'instacart',
-            emoji: '🛒',
-            name: 'Instacart',
-            desc: 'Delivery in as fast as 1 hour',
-            color: Color(0xFF66BB6A),
-          ),
-          (
-            key: 'amazonfresh',
-            emoji: '📦',
-            name: 'Amazon Fresh',
-            desc: 'Free delivery with Prime',
-            color: Color(0xFFFF9900),
-          ),
-          (
-            key: 'walmart',
-            emoji: '🔵',
-            name: 'Walmart',
-            desc: 'Everyday low prices',
-            color: Color(0xFF0071CE),
-          ),
-        ];
         return _SheetShell(
           title: 'Order Ingredients',
-          subtitle: card.title,
+          subtitle:
+              '${card.title} · ${missing.length} item${missing.length == 1 ? '' : 's'}',
           children: [
-            for (final svc in services)
+            for (final svc in GroceryService.all)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: GestureDetector(
                   onTap: () {
                     Navigator.pop(ctx);
-                    _fulfillOrder(
-                      card,
-                      isDrink,
-                      themeColor,
-                      ingredients,
-                      svc.name,
-                    );
+                    svc.open(missing);
                   },
                   child: Container(
                     padding: const EdgeInsets.symmetric(
@@ -1588,7 +1873,7 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                           ),
                         ),
                         Icon(
-                          Icons.chevron_right_rounded,
+                          Icons.open_in_new_rounded,
                           size: 14,
                           color: svc.color,
                         ),
@@ -1597,38 +1882,17 @@ class _RecipeDetailScreenState extends State<RecipeDetailScreen> {
                   ),
                 ),
               ),
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                'Opens the store with your missing items searched. Check items off here once you have them.',
+                style: TextStyle(color: AppColors.muted, fontSize: 11),
+              ),
+            ),
           ],
         );
       },
     );
-  }
-
-  void _fulfillOrder(
-    BiteCard card,
-    bool isDrink,
-    Color themeColor,
-    List<CookIngredient> ingredients,
-    String serviceName,
-  ) {
-    setState(() {
-      for (var i = 0; i < ingredients.length; i++) {
-        _checkedIngs.add(i);
-      }
-      for (final side in _addedSides) {
-        final ings = side.ingredients.isEmpty
-            ? const ['Ingredients listed in recipe']
-            : side.ingredients;
-        for (var i = 0; i < ings.length; i++) {
-          _checkedSideIngs.add('${side.name}-$i');
-        }
-      }
-    });
-    ToastService.instance.show('🛒 Ordered via $serviceName!');
-    Future<void>.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) {
-        _showReadyToCookDialog(card, isDrink, themeColor, ingredients.length);
-      }
-    });
   }
 
   // ── Sides sheet ──

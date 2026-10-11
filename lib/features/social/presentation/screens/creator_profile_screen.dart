@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/constants/tier_definitions.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/services/share_service.dart';
 import '../../../../core/services/toast_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/formatters.dart';
@@ -16,6 +17,7 @@ import '../../../../core/widgets/glass.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/domain/entities/bite_card.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../../gamification/domain/tip_selection.dart';
 import '../../data/chat_selection.dart';
 import '../../../../core/widgets/app_network_image.dart';
 import '../../domain/social_models.dart';
@@ -149,11 +151,35 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
       ToastService.instance.show("That's you! 😄");
       return;
     }
-    if (!c.canMessage) {
-      ToastService.instance.show("💬 ${c.handle} isn't taking messages yet");
+    if (!c.canMessage) return;
+    messageCreator(context, c.handle, name: c.name);
+  }
+
+  void _openTip() {
+    final c = _creator;
+    if (c == null) return;
+    if (_isMe) {
+      ToastService.instance.show("That's you! 😄");
       return;
     }
-    messageCreator(context, c.handle, name: c.name);
+    TipSelection.instance.select(handle: c.handle, emoji: c.avatarEmoji, tagline: c.tagline);
+    context.read<FlowCubit>().setScreen(AppScreen.tipFlow);
+  }
+
+  void _shareProfile() {
+    setState(() => _showMenu = false);
+    final c = _creator;
+    if (c == null) return;
+    ShareSelection.instance.select(ShareTarget(
+      kind: ShareKind.creator,
+      title: c.name,
+      subtitle: '${c.handle} · ${c.recipes} recipes',
+      emoji: c.avatarEmoji,
+      imageUrl: c.avatarUrl,
+      stat: '👥 ${Formatters.compact(c.followers)}',
+      handle: c.handle,
+    ));
+    context.read<FlowCubit>().setScreen(AppScreen.shareSheet);
   }
 
   @override
@@ -290,6 +316,7 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             _FollowButton(handle: c.handle),
+                            if (c.canMessage) ...[
                             const SizedBox(width: 8),
                             GestureDetector(
                               onTap: _openMessage,
@@ -304,9 +331,10 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                                     style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
                               ),
                             ),
+                            ],
                             const SizedBox(width: 8),
                             GestureDetector(
-                              onTap: () => context.read<FlowCubit>().setScreen(AppScreen.tipFlow),
+                              onTap: _openTip,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                                 decoration: BoxDecoration(
@@ -584,94 +612,11 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                       ],
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 16, 12, 20),
-                    child: GestureDetector(
-                      onTap: () => ToastService.instance
-                          .show('🍳 Virtual Kitchen coming soon! Customize your dream kitchen with rewards.'),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          gradient: LinearGradient(
-                              colors: [AppColors.cyan.withValues(alpha: 0.07), AppColors.amber.withValues(alpha: 0.07)]),
-                          border: Border.all(color: AppColors.cyan.withValues(alpha: 0.13)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SizedBox(
-                              height: 120,
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Opacity(
-                                    opacity: 0.3,
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        for (final (i, e) in const ['🍳', '🔪', '🧂', '🍶', '🥘'].indexed)
-                                          Transform.rotate(
-                                            angle: (i - 2) * 8 * 3.14159 / 180,
-                                            child: Padding(
-                                              padding: const EdgeInsets.symmetric(horizontal: 8),
-                                              child: Text(e, style: const TextStyle(fontSize: 36)),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                  Positioned(
-                                    top: 12,
-                                    right: 12,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                      decoration: BoxDecoration(
-                                          color: AppColors.amber.withValues(alpha: 0.13), borderRadius: BorderRadius.circular(100)),
-                                      child: const Text('COMING SOON',
-                                          style: TextStyle(color: AppColors.amber, fontSize: 10, fontWeight: FontWeight.w700)),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('🏠 Virtual Kitchen',
-                                      style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 4),
-                                    child: Text(
-                                      'Earn rewards to customize your dream kitchen. Unlock appliances, decor & '
-                                      'rare items through cooking challenges.',
-                                      style: TextStyle(color: AppColors.muted, fontSize: 12, height: 1.4),
-                                    ),
-                                  ),
-                                  Wrap(
-                                    spacing: 6,
-                                    children: [
-                                      for (final tag in const ['🏆 Earn Items', '🎨 Customize', '🏅 Show Off'])
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withValues(alpha: 0.04),
-                                            borderRadius: BorderRadius.circular(100),
-                                            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-                                          ),
-                                          child: Text(tag, style: const TextStyle(color: AppColors.muted, fontSize: 10)),
-                                        ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                  if (recipes.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 16, 12, 20),
+                      child: _KitchenCard(creator: c, recipes: recipes),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -692,11 +637,8 @@ class _CreatorProfileScreenState extends State<CreatorProfileScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       for (final item in [
-                        ('📤 Share Profile', () {
-                          setState(() => _showMenu = false);
-                          context.read<FlowCubit>().setScreen(AppScreen.shareSheet);
-                        }, false),
-                        ('💬 Send Message', _openMessage, false),
+                        ('📤 Share Profile', _shareProfile, false),
+                        if (c.canMessage) ('💬 Send Message', _openMessage, false),
                         ('🔇 Mute', () => _mute('mute'), false),
                         ('🚫 Block User', () => _mute('block'), false),
                         ('⚠️ Report Profile', _report, true),
@@ -795,4 +737,159 @@ List<BiteCard> _recipesOf(Creator c, ContentState content) {
           seen.add(r.id))
         r,
   ];
+}
+
+/// The creator's kitchen at a glance — tier, cuisines, heat and quickest dish,
+/// all computed from their published recipes.
+class _KitchenCard extends StatelessWidget {
+  const _KitchenCard({required this.creator, required this.recipes});
+
+  final Creator creator;
+  final List<BiteCard> recipes;
+
+  static final RegExp _digits = RegExp(r'\d+');
+
+  static int? _minutes(BiteCard r) {
+    if (r.prepMin != null || r.cookMin != null) return (r.prepMin ?? 0) + (r.cookMin ?? 0);
+    final m = _digits.firstMatch(r.time);
+    if (m == null) return null;
+    final n = int.parse(m.group(0)!);
+    return r.time.toLowerCase().contains('h') && !r.time.toLowerCase().contains('min') ? n * 60 : n;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tier = TierDefinitions.tierFor(creator.xp);
+    final progress = TierDefinitions.progressInTier(creator.xp);
+    final cuisineCounts = <String, int>{};
+    for (final r in recipes) {
+      final cuisine = r.cuisine.trim();
+      if (cuisine.isNotEmpty) cuisineCounts[cuisine] = (cuisineCounts[cuisine] ?? 0) + 1;
+    }
+    final topCuisines = (cuisineCounts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).take(4).toList();
+    final avgHeat = recipes.fold<int>(0, (s, r) => s + r.heat) / recipes.length;
+    final hearts = recipes.fold<double>(0, (s, r) => s + Formatters.numOf(r.hearts)).round();
+    BiteCard? quickest;
+    int? quickestMin;
+    for (final r in recipes) {
+      final m = _minutes(r);
+      if (m != null && m > 0 && (quickestMin == null || m < quickestMin)) {
+        quickest = r;
+        quickestMin = m;
+      }
+    }
+    final firstName = creator.name.split(' ').first;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: LinearGradient(colors: [AppColors.cyan.withValues(alpha: 0.07), AppColors.amber.withValues(alpha: 0.07)]),
+        border: Border.all(color: AppColors.cyan.withValues(alpha: 0.13)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text("🏠 $firstName's Kitchen",
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: tier.color.withValues(alpha: 0.13), borderRadius: BorderRadius.circular(100)),
+                child: Text('${tier.emoji} ${tier.name}',
+                    style: TextStyle(color: tier.color, fontSize: 10, fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(100),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 5,
+              backgroundColor: Colors.white.withValues(alpha: 0.06),
+              valueColor: AlwaysStoppedAnimation(tier.color),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text('${Formatters.compact(creator.xp)} XP', style: const TextStyle(color: AppColors.muted, fontSize: 10)),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              for (final s in [
+                ('${recipes.length}', 'Dishes'),
+                ('${cuisineCounts.length}', 'Cuisines'),
+                (avgHeat == 0 ? '—' : '🌶 ${avgHeat.toStringAsFixed(1)}', 'Avg heat'),
+                ('❤️ ${Formatters.compact(hearts)}', 'Hearts'),
+              ])
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text(s.$1, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                      Text(s.$2, style: const TextStyle(color: AppColors.muted, fontSize: 10)),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          if (topCuisines.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final e in topCuisines)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.04),
+                      borderRadius: BorderRadius.circular(100),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                    ),
+                    child: Text('${e.key} · ${e.value}', style: const TextStyle(color: AppColors.muted, fontSize: 10)),
+                  ),
+              ],
+            ),
+          ],
+          if (quickest != null) ...[
+            const SizedBox(height: 12),
+            GestureDetector(
+              onTap: () => openRecipe(context, quickest!.id),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.03),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+                ),
+                child: Row(
+                  children: [
+                    Text(quickest.emoji, style: const TextStyle(fontSize: 18)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('⚡ QUICKEST DISH',
+                              style: TextStyle(color: AppColors.amber, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                          Text('${quickest.title} · $quickestMin min',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.muted),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }

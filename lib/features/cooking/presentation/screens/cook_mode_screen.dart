@@ -6,12 +6,12 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/router/app_screen.dart';
 import '../../../../core/router/flow_cubit.dart';
 import '../../../../core/services/toast_service.dart';
-import '../../../../core/state/app_state.dart';
-import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../data/cook_data.dart';
+import '../../data/grocery_services.dart';
+import '../../domain/cook_plan.dart';
 import '../../domain/cook_session.dart';
 
 /// Hands-free, step-by-step cooking flow — ports `CookModeScreen` from
@@ -22,6 +22,9 @@ import '../../domain/cook_session.dart';
 /// to keep the interaction surface manageable for this port; the core
 /// task-checklist walkthrough, per-step timers, pace tracking and the two
 /// view modes (Step View / Full Timeline) are preserved.
+///
+/// Steps and ingredients come from the recipe being cooked ([CookPlan]);
+/// a recipe without steps gets an empty state instead of a template.
 class CookModeScreen extends StatefulWidget {
   const CookModeScreen({super.key});
 
@@ -30,8 +33,7 @@ class CookModeScreen extends StatefulWidget {
 }
 
 class _CookModeScreenState extends State<CookModeScreen> {
-  static const int _targetSecs = 25 * 60;
-
+  late final int _targetSecs;
   late final bool _isDrink;
   late final Color _themeColor;
   late final List<CookStepDef> _steps;
@@ -41,7 +43,6 @@ class _CookModeScreenState extends State<CookModeScreen> {
   final Set<int> _completedSteps = {};
   final Set<String> _checkedTasks = {};
   String _viewMode = 'A';
-  int _demoSpeed = 3;
 
   int _totalTimer = 0;
   int _personalTimer = 0;
@@ -57,14 +58,36 @@ class _CookModeScreenState extends State<CookModeScreen> {
   @override
   void initState() {
     super.initState();
-    final appState = context.read<AppStateCubit>().state;
-    _isDrink = appState.subTab == DeckTab.drinks;
+    final session = CookSession.instance;
+    final plan = CookPlan.instance;
+    _isDrink = session.isDrink;
     _themeColor = _isDrink ? AppColors.drinksBlue : AppColors.coral;
-    _steps = _isDrink ? CookData.drinkCookSteps : CookData.foodCookSteps;
-    _dishes = _isDrink ? CookData.drinkDishes(_themeColor) : CookData.foodDishes(_themeColor);
-    _ticker = Timer.periodic(const Duration(milliseconds: 350), _onTick);
+    _targetSecs = plan.targetMinutes.clamp(1, 24 * 60) * 60;
+    _steps = CookPlan.toCookSteps(plan.steps);
+    _dishes = [
+      if (plan.ingredients.isNotEmpty)
+        CookDish(
+          name: session.dishTitle,
+          emoji: session.emoji.isEmpty ? (_isDrink ? '🍸' : '🍽') : session.emoji,
+          color: _themeColor,
+          items: plan.ingredients,
+        ),
+      for (final side in plan.sides)
+        if (side.ingredients.isNotEmpty)
+          CookDish(name: side.name, emoji: side.emoji, color: side.color, items: side.ingredients),
+    ];
+    // Carry over what was already ticked off on Recipe Detail (main dish is
+    // dish 0 when it has ingredients).
+    if (plan.ingredients.isNotEmpty) {
+      for (final i in plan.checkedIngredients) {
+        if (i < plan.ingredients.length) _cookIngChecked.add('0-$i');
+      }
+    }
+    if (_steps.isEmpty) return;
+    _ticker = Timer.periodic(const Duration(seconds: 1), _onTick);
     if (_steps[_currentStep].timerSecs != null) {
-      _startStepTimer(_currentStep);
+      _stepTimers[_currentStep] = _steps[_currentStep].timerSecs!;
+      _stepTimerRunning = _currentStep;
     }
   }
 
@@ -74,12 +97,8 @@ class _CookModeScreenState extends State<CookModeScreen> {
     super.dispose();
   }
 
-  int get _tickAmount => switch (_demoSpeed) {
-        <= 2 => 1,
-        <= 3 => 5,
-        <= 4 => 30,
-        _ => 60,
-      };
+  /// Real time: the ticker fires once a second.
+  static const int _tickAmount = 1;
 
   void _onTick(Timer t) {
     if (!mounted) return;
@@ -146,6 +165,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_steps.isEmpty) return _noStepsState();
     final step = _steps[_currentStep];
     return PopScope(
       canPop: false,
@@ -237,20 +257,6 @@ class _CookModeScreenState extends State<CookModeScreen> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => setState(() => _demoSpeed = _demoSpeed >= 5 ? 1 : _demoSpeed + 1),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.amber.withValues(alpha: 0.13),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.amber.withValues(alpha: 0.27)),
-              ),
-              child: Text('${_demoSpeed}x ⚡',
-                  style: const TextStyle(color: AppColors.amber, fontWeight: FontWeight.w700, fontSize: 12)),
-            ),
-          ),
         ],
       ),
     );
@@ -258,6 +264,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
 
   Widget _ingredientsBanner() {
     final total = _dishes.fold<int>(0, (s, d) => s + d.items.length);
+    if (total == 0) return const SizedBox.shrink();
     final checked = _cookIngChecked.length;
     final allReady = checked >= total && total > 0;
     return Padding(
@@ -1109,18 +1116,7 @@ class _CookModeScreenState extends State<CookModeScreen> {
                                       style: const TextStyle(color: AppColors.muted, fontSize: 11)),
                                   const SizedBox(height: 8),
                                   GestureDetector(
-                                    onTap: () {
-                                      setSheetState(() {
-                                        setState(() {
-                                          for (var di = 0; di < _dishes.length; di++) {
-                                            for (var ii = 0; ii < _dishes[di].items.length; ii++) {
-                                              _cookIngChecked.add('$di-$ii');
-                                            }
-                                          }
-                                        });
-                                      });
-                                      ToastService.instance.show('✅ Ordered $unchecked items — all set to cook!');
-                                    },
+                                    onTap: () => _openOrderPicker(_missingItems()),
                                     child: Container(
                                       width: double.infinity,
                                       height: 46,
@@ -1169,6 +1165,160 @@ class _CookModeScreenState extends State<CookModeScreen> {
           },
         );
       },
+    );
+  }
+
+  /// Ingredient lines not ticked off yet, across all dishes.
+  List<String> _missingItems() => [
+        for (var di = 0; di < _dishes.length; di++)
+          for (var ii = 0; ii < _dishes[di].items.length; ii++)
+            if (!_cookIngChecked.contains('$di-$ii')) _dishes[di].items[ii],
+      ];
+
+  /// Grocery service picker — opens the chosen store's search for the
+  /// missing items. Nothing is ordered in-app, so nothing is auto-checked.
+  void _openOrderPicker(List<String> missing) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: ColoredBox(
+            color: AppColors.bgDark,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(20, 12, 20, MediaQuery.paddingOf(ctx).bottom + 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4))),
+                  ),
+                  Center(
+                    child: Text('Order ${missing.length} Missing Item${missing.length == 1 ? '' : 's'}',
+                        style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(height: 14),
+                  for (final svc in GroceryService.all)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: GestureDetector(
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          svc.open(missing);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: svc.color.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: svc.color.withValues(alpha: 0.15)),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(svc.emoji, style: const TextStyle(fontSize: 22)),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(svc.name,
+                                        style: const TextStyle(
+                                            color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                                    Text(svc.desc, style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+                                  ],
+                                ),
+                              ),
+                              Icon(Icons.open_in_new_rounded, size: 14, color: svc.color),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 4),
+                  const Text('Opens the store with your missing items searched. Check items off once you have them.',
+                      style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── No steps ──
+
+  Widget _noStepsState() {
+    final noun = _isDrink ? 'drink' : 'recipe';
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) context.read<FlowCubit>().goBack();
+      },
+      child: Material(
+      color: AppColors.bgDark,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () => context.read<FlowCubit>().goBack(),
+                    child: const Icon(Icons.close_rounded, color: AppColors.muted, size: 24),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_isDrink ? '🍸' : '📝', style: const TextStyle(fontSize: 48)),
+                      const SizedBox(height: 12),
+                      Text('Steps not available for this $noun yet',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_isDrink ? 'Mix' : 'Cook'} Mode walks you through the $noun\'s own steps, and this one doesn\'t have any yet.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.muted, fontSize: 13, height: 1.5),
+                      ),
+                      const SizedBox(height: 20),
+                      GestureDetector(
+                        onTap: () => context.read<FlowCubit>().goBack(),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(100),
+                            color: _themeColor.withValues(alpha: 0.15),
+                            border: Border.all(color: _themeColor.withValues(alpha: 0.3)),
+                          ),
+                          child: Text('Go Back',
+                              style: TextStyle(color: _themeColor, fontWeight: FontWeight.w700, fontSize: 14)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      ),
     );
   }
 

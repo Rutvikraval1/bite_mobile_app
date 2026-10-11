@@ -21,6 +21,7 @@ import '../../../auth/domain/entities/auth_state.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/domain/entities/bite_card.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../../genie/data/genie_filter_store.dart';
 import '../../../social/presentation/blocs/social_feed_cubit.dart';
 import '../widgets/daily_chest_overlay.dart';
 import '../widgets/deck_card.dart';
@@ -111,7 +112,8 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
       DeckTab.places => state.places,
       _ => state.recipes,
     };
-    return raw;
+    // Genie filters (applied from the filter sheet) narrow the deck.
+    return GenieFilterStore.instance.applyTo(tab, raw);
   }
 
   Color get _accentColor {
@@ -150,7 +152,14 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
   }
 
   void _openDetail(BiteCard card) {
-    context.read<AppStateCubit>().setActiveCardIndex(_cardIndex);
+    final appState = context.read<AppStateCubit>();
+    appState.setActiveCardIndex(_cardIndex);
+    // A Genie-filtered deck's index doesn't line up with the full catalog
+    // Recipe Detail reads, so hand it the card directly.
+    if (!card.isPlace &&
+        GenieFilterStore.instance.appliedFor(appState.state.subTab) != null) {
+      appState.viewRecipe(card);
+    }
     final flow = context.read<FlowCubit>();
     if (card.isPlace) {
       flow.setScreen(AppScreen.placeDetail);
@@ -558,11 +567,11 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
   }
 
   List<BiteCard> _deckFor(DeckTab tab, ContentState content) {
-    return switch (tab) {
+    return GenieFilterStore.instance.applyTo(tab, switch (tab) {
       DeckTab.drinks => content.drinks,
       DeckTab.places => content.places,
       _ => content.recipes,
-    };
+    });
   }
 
   Widget _buildBackground(List<BiteCard> deck, BiteCard? card) {
