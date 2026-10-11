@@ -146,7 +146,8 @@ class AppStateCubit extends Cubit<AppState> {
       longestStreak: profile.longestStreak,
       streakMultiplier: profile.streakMultiplier,
       streakFreezes: profile.streakFreezes,
-      dailyChestClaimed: profile.dailyChestClaimed,
+      // Not from profile.dailyChestClaimed: that flag never resets. Today's
+      // status comes from DailyChestService (daily_chest_status RPC).
       isPremium: profile.isPremium,
       userTier: profile.userTier,
       userCuisines: profile.cuisines,

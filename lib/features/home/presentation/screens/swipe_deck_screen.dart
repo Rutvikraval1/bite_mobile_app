@@ -22,6 +22,7 @@ import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/domain/entities/bite_card.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
 import '../../../genie/data/genie_filter_store.dart';
+import '../../data/daily_chest_service.dart';
 import '../../../social/presentation/blocs/social_feed_cubit.dart';
 import '../widgets/daily_chest_overlay.dart';
 import '../widgets/deck_card.dart';
@@ -75,6 +76,30 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     _loadingTimer = Timer(const Duration(milliseconds: 400), () {
       if (mounted) setState(() => _deckLoading = false);
     });
+    // Pop today's chest once the home screen has settled.
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _refreshChest(autoOpen: true),
+    );
+  }
+
+  /// Loads today's chest status; the profile's `daily_chest_claimed` flag
+  /// never resets, so the server status is the source of truth.
+  ///
+  /// With [autoOpen], shows the "Daily reward earned" popup when today's
+  /// chest hasn't been opened yet (on first load and on pull-to-refresh).
+  Future<void> _refreshChest({bool autoOpen = false}) async {
+    final s = await DailyChestService.instance.refresh();
+    if (!mounted || s == null) return;
+    final app = context.read<AppStateCubit>();
+    app.setDailyChestClaimed(s.claimedToday);
+    if (autoOpen && !s.claimedToday && !app.state.showDailyChest) {
+      app.setShowDailyChest(true);
+    }
+  }
+
+  void _openChest() {
+    HapticsService.light();
+    context.read<AppStateCubit>().setShowDailyChest(true);
   }
 
   @override
@@ -86,7 +111,8 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     super.dispose();
   }
 
-  final GlobalKey<RefreshIndicatorState> _refreshKey = GlobalKey<RefreshIndicatorState>();
+  final GlobalKey<RefreshIndicatorState> _refreshKey =
+      GlobalKey<RefreshIndicatorState>();
 
   /// Pull-to-refresh: reloads the catalog (silently, cards stay on screen),
   /// saved items, profile stats (XP / coins / streak) and trending.
@@ -97,6 +123,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
       content.reloadSaved(),
       context.read<AuthCubit>().refreshProfile(),
       context.read<SocialFeedCubit>().loadDiscover(),
+      _refreshChest(autoOpen: true),
     ]);
     if (!mounted) return;
     if (results.first == false) {
@@ -128,10 +155,10 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
 
   /// `saved_items` / `swipes` item_type for the current deck tab.
   String get _itemType => switch (_activeTab) {
-        DeckTab.drinks => 'drink',
-        DeckTab.places => 'place',
-        DeckTab.food => 'recipe',
-      };
+    DeckTab.drinks => 'drink',
+    DeckTab.places => 'place',
+    DeckTab.food => 'recipe',
+  };
 
   /// Writes [card] to `saved_items` so it shows in the Saved tab (the
   /// repository skips duplicates). Toasts if the save fails.
@@ -402,164 +429,179 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
         backgroundColor: AppColors.bgCard,
         edgeOffset: MediaQuery.paddingOf(context).top,
         child: BlocBuilder<ContentCubit, ContentState>(
-        builder: (context, content) {
-          final contentLoading = content.loading;
-          return BlocBuilder<AppStateCubit, AppState>(
-            buildWhen: (prev, curr) =>
-                prev.subTab != curr.subTab ||
-                prev.ageVerified != curr.ageVerified ||
-                prev.locationGranted != curr.locationGranted ||
-                prev.xp != curr.xp ||
-                prev.biteCoins != curr.biteCoins ||
-                prev.mealItems != curr.mealItems ||
-                prev.showDailyChest != curr.showDailyChest ||
-                prev.showStreakSheet != curr.showStreakSheet ||
-                prev.mealPlannerSheet != curr.mealPlannerSheet,
-            builder: (context, state) {
-              final scale = BiteScale.of(context);
-              final deck = _deckFor(state.subTab, content);
-              final card = deck.isEmpty ? null : deck[_cardIndex % deck.length];
-              final infoExpanded = _expandedByCat[state.subTab] ?? false;
+          builder: (context, content) {
+            final contentLoading = content.loading;
+            return BlocBuilder<AppStateCubit, AppState>(
+              buildWhen: (prev, curr) =>
+                  prev.subTab != curr.subTab ||
+                  prev.ageVerified != curr.ageVerified ||
+                  prev.locationGranted != curr.locationGranted ||
+                  prev.xp != curr.xp ||
+                  prev.biteCoins != curr.biteCoins ||
+                  prev.mealItems != curr.mealItems ||
+                  prev.showDailyChest != curr.showDailyChest ||
+                  prev.showStreakSheet != curr.showStreakSheet ||
+                  prev.mealPlannerSheet != curr.mealPlannerSheet,
+              builder: (context, state) {
+                final scale = BiteScale.of(context);
+                final deck = _deckFor(state.subTab, content);
+                final card = deck.isEmpty
+                    ? null
+                    : deck[_cardIndex % deck.length];
+                final infoExpanded = _expandedByCat[state.subTab] ?? false;
 
-              return BlocBuilder<AuthCubit, AuthState>(
-                builder: (context, auth) {
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _buildBackground(deck, card),
-                      if (card != null)
-                        _buildCardStack(card, state, scale, infoExpanded),
-                      _buildOverlays(state, auth, scale),
-                      // Skeleton loading — shown while fetching, whether or
-                      // not a card is already on screen.
-                      if (contentLoading || _deckLoading) const _DeckSkeleton(),
-                      // Deck fetch failed and left nothing to show.
-                      if (!contentLoading &&
-                          !_deckLoading &&
-                          card == null &&
-                          content.error != null)
-                        ErrorState(
-                          message: content.error!,
-                          backgroundColor: Colors.transparent,
-                          onRetry: () => context.read<ContentCubit>().refetch(),
-                        ),
-                      // Loaded successfully but this sub-tab has nothing.
-                      if (!contentLoading &&
-                          !_deckLoading &&
-                          card == null &&
-                          content.error == null)
-                        EmptyState(
-                          emoji: switch (state.subTab) {
-                            DeckTab.drinks => '🥤',
-                            DeckTab.places => '📍',
-                            DeckTab.food => '🍽',
-                          },
-                          title: 'No more to show',
-                          message:
-                              'Check back soon for new ${state.subTab.name}.',
-                        ),
-                      // Gesture layer
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onVerticalDragStart: (_) {
-                            if (state.showDailyChest) return;
-                            setState(() {
-                              _isDragging = true;
-                              _dragY = 0;
-                            });
-                          },
-                          onVerticalDragUpdate: (details) {
-                            if (!_isDragging) return;
-                            _dragY -= details.delta.dy;
-                          },
-                          onVerticalDragEnd: (_) => _onDragEnd(),
-                          onTap: () {
-                            if (card != null) _openDetail(card);
-                          },
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                      // Top bar + XP bar
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: SafeArea(
-                          bottom: false,
-                          child: _PullZone(
-                            onPull: () => _refreshKey.currentState?.show(),
-                            child: SwipeDeckTopBar(
-                            subTab: state.subTab,
-                            onSubTabChanged: (t) {
-                              if (t == state.subTab) return;
-                              context.read<AppStateCubit>().setSubTab(t);
+                return BlocBuilder<AuthCubit, AuthState>(
+                  builder: (context, auth) {
+                    final (effects, controls, popups) = _buildOverlays(
+                      state,
+                      auth,
+                      scale,
+                    );
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        _buildBackground(deck, card),
+                        if (card != null)
+                          _buildCardStack(card, state, scale, infoExpanded),
+                        effects,
+                        // Skeleton loading — shown while fetching, whether or
+                        // not a card is already on screen.
+                        if (contentLoading || _deckLoading)
+                          const _DeckSkeleton(),
+                        // Deck fetch failed and left nothing to show.
+                        if (!contentLoading &&
+                            !_deckLoading &&
+                            card == null &&
+                            content.error != null)
+                          ErrorState(
+                            message: content.error!,
+                            backgroundColor: Colors.transparent,
+                            onRetry: () =>
+                                context.read<ContentCubit>().refetch(),
+                          ),
+                        // Loaded successfully but this sub-tab has nothing.
+                        if (!contentLoading &&
+                            !_deckLoading &&
+                            card == null &&
+                            content.error == null)
+                          EmptyState(
+                            emoji: switch (state.subTab) {
+                              DeckTab.drinks => '🥤',
+                              DeckTab.places => '📍',
+                              DeckTab.food => '🍽',
+                            },
+                            title: 'No more to show',
+                            message:
+                                'Check back soon for new ${state.subTab.name}.',
+                          ),
+                        // Gesture layer
+                        Positioned.fill(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onVerticalDragStart: (_) {
+                              if (state.showDailyChest) return;
                               setState(() {
-                                _cardIndex = 0;
-                                _deckLoading = true;
+                                _isDragging = true;
+                                _dragY = 0;
                               });
-                              _loadingTimer?.cancel();
-                              _loadingTimer = Timer(
-                                const Duration(milliseconds: 400),
-                                () {
-                                  if (mounted) {
-                                    setState(() => _deckLoading = false);
+                            },
+                            onVerticalDragUpdate: (details) {
+                              if (!_isDragging) return;
+                              _dragY -= details.delta.dy;
+                            },
+                            onVerticalDragEnd: (_) => _onDragEnd(),
+                            onTap: () {
+                              if (card != null) _openDetail(card);
+                            },
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+                        // XP bar + undo: above the swipe layer so they're
+                        // tappable, below the top bar's menus.
+                        controls,
+                        // Top bar + XP bar
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: SafeArea(
+                            bottom: false,
+                            child: _PullZone(
+                              onPull: () => _refreshKey.currentState?.show(),
+                              child: SwipeDeckTopBar(
+                                subTab: state.subTab,
+                                onSubTabChanged: (t) {
+                                  if (t == state.subTab) return;
+                                  context.read<AppStateCubit>().setSubTab(t);
+                                  setState(() {
+                                    _cardIndex = 0;
+                                    _deckLoading = true;
+                                  });
+                                  _loadingTimer?.cancel();
+                                  _loadingTimer = Timer(
+                                    const Duration(milliseconds: 400),
+                                    () {
+                                      if (mounted) {
+                                        setState(() => _deckLoading = false);
+                                      }
+                                    },
+                                  );
+                                },
+                                onAvatarClick: () => context
+                                    .read<FlowCubit>()
+                                    .setScreen(AppScreen.profile),
+                                onBellClick: () => context
+                                    .read<FlowCubit>()
+                                    .setScreen(AppScreen.notifications),
+                                onTrophyClick: () => context
+                                    .read<FlowCubit>()
+                                    .setScreen(AppScreen.competition),
+                                onCrownClick: () {
+                                  if (state.isPremium) {
+                                    ToastService.instance.show(
+                                      "👑 You're a b🌶te Premium member!",
+                                    );
+                                  } else {
+                                    PremiumGateService.instance.show(
+                                      'b🌶te Premium',
+                                      'premium',
+                                      'Unlock unlimited Genie, meal planning, '
+                                          'undo, smart filters, and recipe scanning — '
+                                          '\$6.99/mo.',
+                                    );
                                   }
                                 },
-                              );
-                            },
-                            onAvatarClick: () => context
-                                .read<FlowCubit>()
-                                .setScreen(AppScreen.profile),
-                            onBellClick: () => context
-                                .read<FlowCubit>()
-                                .setScreen(AppScreen.notifications),
-                            onTrophyClick: () => context
-                                .read<FlowCubit>()
-                                .setScreen(AppScreen.competition),
-                            onCrownClick: () {
-                              if (state.isPremium) {
-                                ToastService.instance.show(
-                                  "👑 You're a b🌶te Premium member!",
-                                );
-                              } else {
-                                PremiumGateService.instance.show(
-                                  'b🌶te Premium',
-                                  'premium',
-                                  'Unlock unlimited Genie, meal planning, '
-                                      'undo, smart filters, and recipe scanning — '
-                                      '\$6.99/mo.',
-                                );
-                              }
-                            },
-                            onMealReminderClick: () => context
-                                .read<FlowCubit>()
-                                .setScreen(AppScreen.mealReminder),
-                            onDrinksGate: () => context
-                                .read<FlowCubit>()
-                                .setScreen(AppScreen.drinksAgeGate),
-                            onPlacesGate: () => context
-                                .read<FlowCubit>()
-                                .setScreen(AppScreen.genie),
-                            ageVerified: state.ageVerified,
-                            locationGranted: state.locationGranted,
-                            xp: state.xp,
-                            notificationCount: state.notificationCount,
-                            avatarEmoji: auth.profile?.avatarEmoji,
-                            avatarUrl: auth.profile?.avatarUrl,
-                          ),
+                                onMealReminderClick: () => context
+                                    .read<FlowCubit>()
+                                    .setScreen(AppScreen.mealReminder),
+                                onDrinksGate: () => context
+                                    .read<FlowCubit>()
+                                    .setScreen(AppScreen.drinksAgeGate),
+                                onPlacesGate: () => context
+                                    .read<FlowCubit>()
+                                    .setScreen(AppScreen.genie),
+                                ageVerified: state.ageVerified,
+                                locationGranted: state.locationGranted,
+                                xp: state.xp,
+                                notificationCount: state.notificationCount,
+                                avatarEmoji: auth.profile?.avatarEmoji,
+                                avatarUrl: auth.profile?.avatarUrl,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                      // Floating pill nav
-                      const FloatingPillNav(),
-                    ],
-                  );
-                },
-              );
-            },
-          );
-        },
+                        // Floating pill nav
+                        const FloatingPillNav(),
+                        // Popups go last so nothing (including the swipe
+                        // layer, top bar and nav) can swallow their taps.
+                        popups,
+                      ],
+                    );
+                  },
+                );
+              },
+            );
+          },
         ),
       ),
       bottomNavigationBar: const SizedBox(height: 0), // remove default nav bar
@@ -710,8 +752,19 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     );
   }
 
-  Widget _buildOverlays(AppState state, AuthState auth, BiteScale scale) {
+  /// Returns three layers:
+  /// - effects: non-interactive visuals, under the swipe gesture layer;
+  /// - controls: XP bar + undo toast, just above the swipe layer;
+  /// - popups: chest / streak / meal planner / service picker, on top of
+  ///   the whole screen.
+  (Widget, Widget, Widget) _buildOverlays(
+    AppState state,
+    AuthState auth,
+    BiteScale scale,
+  ) {
     final overlay = <Widget>[];
+    final front = <Widget>[];
+    final controls = <Widget>[];
 
     // Drag indicators
     if (_isDragging) {
@@ -758,7 +811,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
 
     // Undo toast
     if (_undoCard != null && !_passAnim) {
-      overlay.add(
+      controls.add(
         Positioned(
           left: 16,
           right: 16,
@@ -787,7 +840,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
 
     // Service picker
     if (_showServicePicker) {
-      overlay.add(
+      front.add(
         _ServicePicker(
           onClose: () => setState(() => _showServicePicker = false),
           onPick: (service) {
@@ -801,30 +854,35 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     }
 
     // Daily chest
-    if (state.showDailyChest && !state.dailyChestClaimed) {
-      overlay.add(
+    if (state.showDailyChest) {
+      front.add(
         DailyChestOverlay(
           isPremium: state.isPremium,
-          onClaim: (rewards) {
+          signedIn: auth.authenticated,
+          // The server already added these to the profile; mirror them
+          // locally (as deltas, so unsynced local XP isn't lost).
+          onClaimed: (claim) {
             final app = context.read<AppStateCubit>();
-            app.addBiteCoins(rewards.coins);
-            app.addXp(rewards.xp);
+            app.addBiteCoins(claim.coins);
+            app.addXp(claim.xp);
             app.setDailyChestClaimed(true);
+            HapticsService.medium();
           },
+          onSignIn: () => context.read<FlowCubit>().setScreen(AppScreen.auth),
           onClose: () => context.read<AppStateCubit>().setShowDailyChest(false),
-          onUpgradePremium: () => PremiumGateService.instance.show(
-            'Spicy Chest',
-            'premium',
-            'Unlock daily Spicy Chests with 25–100 coins, rare frame shards, '
-                'and exclusive rewards every day.',
-          ),
+          // Full Premium screen. Coming back home re-checks the chest and
+          // re-opens this popup (now with the Spicy Chest unlocked).
+          onUpgradePremium: () {
+            context.read<AppStateCubit>().setShowDailyChest(false);
+            context.read<FlowCubit>().setScreen(AppScreen.premium);
+          },
         ),
       );
     }
 
     // Streak sheet
     if (state.showStreakSheet) {
-      overlay.add(
+      front.add(
         StreakSheet(
           streakCount: state.streakCount,
           longestStreak: state.longestStreak,
@@ -839,7 +897,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     // Meal planner sheet
     final sheet = state.mealPlannerSheet;
     if (sheet != null) {
-      overlay.add(
+      front.add(
         MealPlannerBottomSheet(
           sheet: sheet,
           mealCalendar: context.read<ContentCubit>().state.mealPlans,
@@ -851,7 +909,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     }
 
     // XP progress bar (placed above card, below top bar)
-    overlay.add(
+    controls.add(
       Positioned(
         top: scale.isTiny ? 82 : 118,
         left: scale.isTiny ? 12 : 16,
@@ -865,11 +923,20 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
               context.read<FlowCubit>().setScreen(AppScreen.cookingLevel),
           onStreakTap: () =>
               context.read<AppStateCubit>().setShowStreakSheet(true),
+          // Chest button only for signed-in users with a known status.
+          chestReady: auth.authenticated
+              ? (state.dailyChestClaimed ? false : true)
+              : null,
+          onChestTap: _openChest,
         ),
       ),
     );
 
-    return Stack(fit: StackFit.expand, children: overlay);
+    return (
+      Stack(fit: StackFit.expand, children: overlay),
+      Stack(fit: StackFit.expand, children: controls),
+      Stack(fit: StackFit.expand, children: front),
+    );
   }
 }
 

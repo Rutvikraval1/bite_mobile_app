@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bite/core/router/app_screen.dart';
 import 'package:bite/core/router/flow_cubit.dart';
 import 'package:bite/core/state/app_state_cubit.dart';
 import 'package:bite/features/auth/domain/entities/auth_result.dart';
@@ -355,6 +356,30 @@ void main() {
       tester.widget<DeckCard>(find.byType(DeckCard)).card.title,
       'The Golden Fork',
     );
+
+    await _flushPendingTimers(tester);
+  });
+
+  testWidgets('daily chest popup sits above the swipe layer (Upgrade works)',
+      (tester) async {
+    await _pumpDeck(tester);
+
+    final ctx = tester.element(find.byType(SwipeDeckScreen));
+    final app = BlocProvider.of<AppStateCubit>(ctx);
+    final flow = BlocProvider.of<FlowCubit>(ctx);
+    app.setShowDailyChest(true);
+    // Let the pop-in animation finish so the chests are at full size.
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    await tester.tap(find.text('Upgrade →'));
+    await tester.pump();
+
+    expect(app.state.showDailyChest, isFalse, reason: 'popup closes');
+    // Navigation runs through the transition overlay.
+    await tester.pump(const Duration(seconds: 1));
+    expect(flow.state.screen, AppScreen.premium);
 
     await _flushPendingTimers(tester);
   });

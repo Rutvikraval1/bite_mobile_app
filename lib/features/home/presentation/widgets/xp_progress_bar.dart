@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/constants/tier_definitions.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/widgets/animations/loops.dart';
 
 /// Tier entry for the XP bar: a level from [TierDefinitions] (the app-wide
 /// ladder) plus the bar's gradient colours and the next level's details.
@@ -46,6 +47,8 @@ class XpProgressBar extends StatelessWidget {
     this.xpFlash,
     this.onTap,
     this.onStreakTap,
+    this.chestReady,
+    this.onChestTap,
   });
 
   final int xp;
@@ -54,6 +57,11 @@ class XpProgressBar extends StatelessWidget {
   final int? xpFlash;
   final VoidCallback? onTap;
   final VoidCallback? onStreakTap;
+
+  /// Daily chest button: true = ready to open, false = opened today,
+  /// null = hidden (signed out).
+  final bool? chestReady;
+  final VoidCallback? onChestTap;
 
   _XpTier get _tier {
     final all = TierDefinitions.all;
@@ -153,6 +161,13 @@ class XpProgressBar extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (chestReady != null) ...[
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: onChestTap,
+                        child: _ChestPill(ready: chestReady!, tiny: tiny),
+                      ),
+                    ],
                     if (streakMultiplier > 1) ...[
                       const SizedBox(width: 4),
                       Container(
@@ -307,5 +322,37 @@ class XpProgressBar extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Daily chest shortcut next to the streak pill: pulses when today's chest
+/// is ready, dims once it's been opened.
+class _ChestPill extends StatelessWidget {
+  const _ChestPill({required this.ready, required this.tiny});
+
+  final bool ready;
+  final bool tiny;
+
+  @override
+  Widget build(BuildContext context) {
+    final pill = Container(
+      padding: EdgeInsets.symmetric(horizontal: tiny ? 4 : 6, vertical: tiny ? 0 : 1),
+      decoration: BoxDecoration(
+        color: ready ? AppColors.amber.withValues(alpha: 0.15) : Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(100),
+        border: Border.all(
+          color: ready ? AppColors.amber.withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.1),
+        ),
+      ),
+      child: Text(
+        ready ? '🎁 Open' : '📦 ✓',
+        style: TextStyle(
+          fontSize: tiny ? 8 : 10,
+          fontWeight: FontWeight.w700,
+          color: ready ? AppColors.amber : Colors.white.withValues(alpha: 0.4),
+        ),
+      ),
+    );
+    return ready ? Pulse(amount: 0.06, duration: const Duration(milliseconds: 1400), child: pill) : pill;
   }
 }

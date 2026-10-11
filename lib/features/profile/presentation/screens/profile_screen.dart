@@ -827,7 +827,7 @@ class _GamificationPanel extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             SizedBox(
-              height: 90,
+              height: 96,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: catalog.BadgeCatalog.all.length,
@@ -841,22 +841,27 @@ class _GamificationPanel extends StatelessWidget {
                       opacity: isOwned ? 1 : 0.45,
                       child: Container(
                         width: 72,
-                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.03),
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(color: b.color.withValues(alpha: isOwned ? 0.4 : 0.15)),
                         ),
                         child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(isOwned ? b.emoji : '🔒', style: const TextStyle(fontSize: 28)),
+                            Text(isOwned ? b.emoji : '🔒', style: const TextStyle(fontSize: 28, height: 1.1)),
                             const SizedBox(height: 4),
-                            Text(
-                              b.name,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 9, fontWeight: FontWeight.w600),
+                            // Flexible so a 2-line name (or larger system
+                            // text size) shrinks instead of overflowing.
+                            Flexible(
+                              child: Text(
+                                b.name,
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 9, height: 1.2, fontWeight: FontWeight.w600),
+                              ),
                             ),
                           ],
                         ),

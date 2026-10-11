@@ -4,11 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../network/supabase_client_provider.dart';
+import '../theme/app_colors.dart';
 import 'table_names.dart';
 
-import '../theme/app_colors.dart';
-
-/// XP tier ladder — ported from the prototype shell.
+/// One XP level (a row of `xp_tiers`).
 class XpTier {
   const XpTier({
     required this.min,
@@ -17,6 +16,9 @@ class XpTier {
     required this.name,
     required this.emoji,
     required this.color,
+    this.tagline = '',
+    this.rewardEmoji,
+    this.rewardName,
   });
 
   final int min;
@@ -25,6 +27,15 @@ class XpTier {
   final String name;
   final String emoji;
   final Color color;
+
+  /// Shown under the level name on Cooking Level.
+  final String tagline;
+
+  /// "My Kitchen" item unlocked on reaching this level; null = none.
+  final String? rewardEmoji;
+  final String? rewardName;
+
+  bool get hasReward => rewardName != null && rewardName!.isNotEmpty;
 }
 
 /// The XP level ladder. Loaded from the `xp_tiers` table at startup
@@ -32,16 +43,23 @@ class XpTier {
 /// table is unreachable or empty.
 abstract final class TierDefinitions {
   static const List<XpTier> defaults = [
-    XpTier(min: 0, max: 10, level: 1, name: 'Curious', emoji: '👀', color: Color(0xFF64B5F6)),
-    XpTier(min: 10, max: 30, level: 2, name: 'Beginner', emoji: '🥄', color: Color(0xFF4CAF50)),
-    XpTier(min: 30, max: 75, level: 3, name: 'Home Cook', emoji: '🍳', color: AppColors.coral),
-    XpTier(min: 75, max: 150, level: 4, name: 'Sous Chef', emoji: '🧑‍🍳', color: AppColors.placesPurple),
-    XpTier(min: 150, max: 300, level: 5, name: 'Chef', emoji: '👨‍🍳', color: AppColors.amber),
-    XpTier(min: 300, max: 600, level: 6, name: 'Master Chef', emoji: '⭐', color: Color(0xFF9C27B0)),
-    XpTier(min: 600, max: 99999, level: 7, name: 'b🌶te Legend', emoji: '🔥', color: Color(0xFFFFD700)),
+    XpTier(min: 0, max: 10, level: 1, name: 'Curious', emoji: '👀', color: Color(0xFF64B5F6),
+        tagline: 'Just getting started — welcome!'),
+    XpTier(min: 10, max: 30, level: 2, name: 'Beginner', emoji: '🥄', color: Color(0xFF4CAF50),
+        tagline: 'Building your kitchen basics', rewardEmoji: '🥄', rewardName: 'Wooden Spoon'),
+    XpTier(min: 30, max: 75, level: 3, name: 'Home Cook', emoji: '🍳', color: AppColors.coral,
+        tagline: "You're mastering the basics!", rewardEmoji: '🍳', rewardName: 'Cast-Iron Pan'),
+    XpTier(min: 75, max: 150, level: 4, name: 'Sous Chef', emoji: '🧑‍🍳', color: AppColors.placesPurple,
+        tagline: 'Leveling up your knife skills', rewardEmoji: '🔪', rewardName: "Chef's Knife"),
+    XpTier(min: 150, max: 300, level: 5, name: 'Chef', emoji: '👨‍🍳', color: AppColors.amber,
+        tagline: 'Cooking like a pro', rewardEmoji: '🍲', rewardName: 'Dutch Oven'),
+    XpTier(min: 300, max: 600, level: 6, name: 'Master Chef', emoji: '⭐', color: Color(0xFF9C27B0),
+        tagline: 'Culinary mastery, unlocked', rewardEmoji: '🥘', rewardName: 'Copper Set'),
+    XpTier(min: 600, max: 99999, level: 7, name: 'b🌶te Legend', emoji: '🔥', color: Color(0xFFFFD700),
+        tagline: 'You are a b🌶te Legend', rewardEmoji: '🔥', rewardName: 'Wood-Fired Oven'),
   ];
 
-  static const String _cacheKey = 'xp_tiers_v1';
+  static const String _cacheKey = 'xp_tiers_v2';
 
   static List<XpTier> _all = defaults;
 
@@ -61,7 +79,7 @@ abstract final class TierDefinitions {
       }
       final rows = await SupabaseClientProvider.instance.client
           .from(TableNames.xpTiers)
-          .select('level, name, emoji, min_xp, color')
+          .select('level, name, emoji, min_xp, color, tagline, reward_emoji, reward_name')
           .order('min_xp');
       final list = (rows as List).cast<Map<String, dynamic>>();
       if (_apply(fromRows(list))) {
@@ -77,7 +95,7 @@ abstract final class TierDefinitions {
   /// begins. Invalid rows are skipped; returns empty if nothing usable.
   @visibleForTesting
   static List<XpTier> fromRows(List<Map<String, dynamic>> rows) {
-    final parsed = <({int level, String name, String emoji, int min, Color color})>[];
+    final parsed = <({int level, String name, String emoji, int min, Color color, Map<String, dynamic> row})>[];
     for (final r in rows) {
       final level = (r['level'] as num?)?.toInt();
       final min = (r['min_xp'] as num?)?.toInt();
@@ -89,6 +107,7 @@ abstract final class TierDefinitions {
         emoji: (r['emoji'] as String?) ?? '⭐',
         min: min,
         color: _parseColor(r['color'] as String?) ?? AppColors.coral,
+        row: r,
       ));
     }
     parsed.sort((a, b) => a.min.compareTo(b.min));
@@ -102,6 +121,9 @@ abstract final class TierDefinitions {
           name: parsed[i].name,
           emoji: parsed[i].emoji,
           color: parsed[i].color,
+          tagline: (parsed[i].row['tagline'] as String?)?.trim() ?? '',
+          rewardEmoji: _nonEmpty(parsed[i].row['reward_emoji']),
+          rewardName: _nonEmpty(parsed[i].row['reward_name']),
         ),
     ];
   }
@@ -111,6 +133,11 @@ abstract final class TierDefinitions {
     _all = List.unmodifiable(tiers);
     version.value++;
     return true;
+  }
+
+  static String? _nonEmpty(Object? v) {
+    final t = (v as String?)?.trim();
+    return t == null || t.isEmpty ? null : t;
   }
 
   static Color? _parseColor(String? hex) {

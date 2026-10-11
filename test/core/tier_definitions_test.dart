@@ -14,6 +14,17 @@ void main() {
       expect(tiers.first.color.toARGB32(), 0xFF64B5F6);
     });
 
+    test('reads tagline and kitchen reward, blank reward means none', () {
+      final tiers = TierDefinitions.fromRows([
+        {'level': 1, 'name': 'Curious', 'min_xp': 0, 'tagline': 'Welcome!', 'reward_name': ''},
+        {'level': 2, 'name': 'Beginner', 'min_xp': 10, 'reward_emoji': '🥄', 'reward_name': 'Wooden Spoon'},
+      ]);
+      expect(tiers[0].tagline, 'Welcome!');
+      expect(tiers[0].hasReward, isFalse);
+      expect(tiers[1].rewardName, 'Wooden Spoon');
+      expect(tiers[1].hasReward, isTrue);
+    });
+
     test('skips invalid rows and rejects a ladder not starting at 0', () {
       expect(
         TierDefinitions.fromRows([
