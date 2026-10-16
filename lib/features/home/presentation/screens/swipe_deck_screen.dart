@@ -21,7 +21,10 @@ import '../../../auth/domain/entities/auth_state.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
 import '../../../content/domain/entities/bite_card.dart';
 import '../../../content/presentation/blocs/content_cubit.dart';
+import '../../../content/presentation/place_links.dart';
+import '../../../cooking/data/grocery_services.dart';
 import '../../../genie/data/genie_filter_store.dart';
+import '../../../social/presentation/social_navigation.dart';
 import '../../data/daily_chest_service.dart';
 import '../../../social/presentation/blocs/social_feed_cubit.dart';
 import '../widgets/daily_chest_overlay.dart';
@@ -131,6 +134,47 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     }
   }
 
+  /// Tag picked from a card's tag row; narrows the deck until cleared.
+  String? _tagFilter;
+
+  static String _normTag(String t) => t.trim().toLowerCase().replaceFirst('#', '');
+
+  List<BiteCard> _applyTag(List<BiteCard> cards) {
+    final tag = _tagFilter;
+    if (tag == null) return cards;
+    return [
+      for (final c in cards)
+        if (c.tags.any((t) => _normTag(t) == tag)) c,
+    ];
+  }
+
+  void _setTagFilter(String? tag) {
+    HapticsService.selection();
+    setState(() {
+      _tagFilter = tag == null ? null : _normTag(tag);
+      _cardIndex = 0;
+    });
+    if (tag != null) ToastService.instance.show('🔍 Showing #${_normTag(tag)}');
+  }
+
+  /// Card the user is looking at, or null when the deck is empty.
+  BiteCard? get _currentCard {
+    final deck = _deck;
+    return deck.isEmpty ? null : deck[_cardIndex % deck.length];
+  }
+
+  /// Opens a grocery service searching for the card's ingredients (or the
+  /// dish name when the recipe has none listed).
+  void _orderFrom(String serviceName) {
+    final card = _currentCard;
+    final service = GroceryService.all
+        .where((g) => g.name == serviceName)
+        .firstOrNull;
+    if (card == null || service == null) return;
+    final items = card.ingredients.where((i) => i.trim().isNotEmpty).toList();
+    service.open(items.isNotEmpty ? items : [card.title]);
+  }
+
   List<BiteCard> get _deck {
     final state = context.read<ContentCubit>().state;
     final tab = context.read<AppStateCubit>().state.subTab;
@@ -139,8 +183,9 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
       DeckTab.places => state.places,
       _ => state.recipes,
     };
-    // Genie filters (applied from the filter sheet) narrow the deck.
-    return GenieFilterStore.instance.applyTo(tab, raw);
+    // Genie filters (applied from the filter sheet) and a tapped tag
+    // narrow the deck.
+    return _applyTag(GenieFilterStore.instance.applyTo(tab, raw));
   }
 
   Color get _accentColor {
@@ -162,12 +207,31 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
 
   /// Writes [card] to `saved_items` so it shows in the Saved tab (the
   /// repository skips duplicates). Toasts if the save fails.
-  Future<void> _saveCard(BiteCard card) async {
+  Future<void> _saveCard(BiteCard card, {bool favorite = false}) async {
+    final noun = switch (_itemType) {
+      'drink' => 'drink',
+      'place' => 'place',
+      _ => 'recipe',
+    };
     final result = await context.read<ContentCubit>().saveItem(card, _itemType);
-    if (!result.isSuccess && mounted) {
+    if (!mounted) return;
+    // Message reflects what actually happened in `saved_items`.
+    final String message;
+    if (!result.isSuccess) {
       debugPrint('[deck] save failed: ${result.error}');
-      ToastService.instance.show("⚠️ Couldn't save ${card.title}. Try again.");
+      message = result.error == 'Not authenticated'
+          ? '🔐 Sign in to save ${noun}s to your Saved tab'
+          : "⚠️ Couldn't save ${card.title}. Try again.";
+    } else if (result.data == false) {
+      message = favorite
+          ? '⭐ ${card.title} is already in your Saved · +15 XP'
+          : '🔖 ${card.title} is already in your Saved';
+    } else {
+      message = favorite
+          ? '⭐ Favorited! ${card.title} saved · +15 XP'
+          : '🔖 Saved ${card.title} to your Saved tab · +8 XP';
     }
+    ToastService.instance.show(message);
   }
 
   void _setXpFlash(int pts) {
@@ -297,7 +361,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     setState(() => _superFav = true);
     context.read<AppStateCubit>().addXp(15);
     _setXpFlash(15);
-    ToastService.instance.show('⭐ Favorited! +15 XP');
+    // The toast comes from _saveCard once the database answers.
     Timer(const Duration(milliseconds: 1000), () {
       if (!mounted) return;
       setState(() {
@@ -309,7 +373,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
       if (deck.isNotEmpty) {
         final card = deck[_cardIndex % deck.length];
         // A super-fav is a save too — it lands in the Saved tab.
-        _saveCard(card);
+        _saveCard(card, favorite: true);
         context.read<ContentCubit>().recordSwipe(
           itemType: _itemType,
           itemId: card.id,
@@ -461,9 +525,44 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                       fit: StackFit.expand,
                       children: [
                         _buildBackground(deck, card),
-                        if (card != null)
-                          _buildCardStack(card, state, scale, infoExpanded),
-                        effects,
+                        // Swipe layer WRAPS the card (instead of covering
+                        // it), so the card's own buttons — ⭐, Order, +Meal,
+                        // creator, info, tags — get their taps first; drags
+                        // and taps on the card body still swipe / open it.
+                        Positioned.fill(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onVerticalDragStart: (_) {
+                              if (state.showDailyChest) return;
+                              setState(() {
+                                _isDragging = true;
+                                _dragY = 0;
+                              });
+                            },
+                            onVerticalDragUpdate: (details) {
+                              if (!_isDragging) return;
+                              _dragY -= details.delta.dy;
+                            },
+                            onVerticalDragEnd: (_) => _onDragEnd(),
+                            onTap: () {
+                              if (card != null) _openDetail(card);
+                            },
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                if (card != null)
+                                  _buildCardStack(
+                                    card,
+                                    state,
+                                    scale,
+                                    infoExpanded,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Visual effects only — never take touches.
+                        IgnorePointer(child: effects),
                         // Skeleton loading — shown while fetching, whether or
                         // not a card is already on screen.
                         if (contentLoading || _deckLoading)
@@ -494,30 +593,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                             message:
                                 'Check back soon for new ${state.subTab.name}.',
                           ),
-                        // Gesture layer
-                        Positioned.fill(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onVerticalDragStart: (_) {
-                              if (state.showDailyChest) return;
-                              setState(() {
-                                _isDragging = true;
-                                _dragY = 0;
-                              });
-                            },
-                            onVerticalDragUpdate: (details) {
-                              if (!_isDragging) return;
-                              _dragY -= details.delta.dy;
-                            },
-                            onVerticalDragEnd: (_) => _onDragEnd(),
-                            onTap: () {
-                              if (card != null) _openDetail(card);
-                            },
-                            child: const SizedBox.expand(),
-                          ),
-                        ),
-                        // XP bar + undo: above the swipe layer so they're
-                        // tappable, below the top bar's menus.
+                        // XP bar + undo: tappable, below the top bar's menus.
                         controls,
                         // Top bar + XP bar
                         Positioned(
@@ -536,6 +612,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                                   setState(() {
                                     _cardIndex = 0;
                                     _deckLoading = true;
+                                    _tagFilter = null;
                                   });
                                   _loadingTimer?.cancel();
                                   _loadingTimer = Timer(
@@ -609,11 +686,11 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
   }
 
   List<BiteCard> _deckFor(DeckTab tab, ContentState content) {
-    return GenieFilterStore.instance.applyTo(tab, switch (tab) {
+    return _applyTag(GenieFilterStore.instance.applyTo(tab, switch (tab) {
       DeckTab.drinks => content.drinks,
       DeckTab.places => content.places,
       _ => content.recipes,
-    });
+    }));
   }
 
   Widget _buildBackground(List<BiteCard> deck, BiteCard? card) {
@@ -666,7 +743,10 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
     final opacity = _exitDirection != null ? 0.0 : 1.0;
 
     return Positioned.fill(
+      // The card's buttons (⭐, Order, + Meal, creator, info, tags) must
+      // receive taps; only the exit animation ignores touches.
       child: IgnorePointer(
+        ignoring: _exitDirection != null,
         child: AnimatedOpacity(
           duration: _exitDirection != null
               ? const Duration(milliseconds: 450)
@@ -720,13 +800,13 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                   });
                 },
                 onTap: () => _openDetail(card),
-                onCreatorTap: () => context.read<FlowCubit>().setScreen(
-                  AppScreen.creatorProfile,
-                ),
+                onCreatorTap: () => openCreator(context, card.creator),
                 onOrderTap: () {
                   if (card.isPlace) {
-                    ToastService.instance.show(
-                      '🛵 Opening delivery options...',
+                    // Delivery partners searching for this place.
+                    PlaceLinks.open(
+                      PlaceLinks.doorDash(card),
+                      opening: '🛵 Opening DoorDash…',
                     );
                   } else {
                     setState(() => _showServicePicker = true);
@@ -734,14 +814,16 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
                 },
                 onMealTap: () => _onMealTap(card),
                 onFavoriteTap: _onSuperFav,
-                onCallTap: () =>
-                    ToastService.instance.show('📞 Calling restaurant...'),
-                onDirectionsTap: () =>
-                    ToastService.instance.show('🗺 Opening directions...'),
-                onReserveTap: () =>
-                    ToastService.instance.show('🪑 Opening reservations...'),
-                onTagTap: (tag) =>
-                    ToastService.instance.show('🔍 Filtering by $tag'),
+                onCallTap: () => PlaceLinks.call(card),
+                onDirectionsTap: () => PlaceLinks.open(
+                  PlaceLinks.directions(card),
+                  opening: '🗺 Opening directions…',
+                ),
+                onReserveTap: () => PlaceLinks.open(
+                  PlaceLinks.openTable(card),
+                  opening: '🪑 Opening OpenTable…',
+                ),
+                onTagTap: _setTagFilter,
                 inMealItems: state.mealItems.any((m) => m.title == card.title),
                 mealItemCount: state.mealItems.length,
               ),
@@ -845,9 +927,7 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
           onClose: () => setState(() => _showServicePicker = false),
           onPick: (service) {
             setState(() => _showServicePicker = false);
-            ToastService.instance.show(
-              '🛒 Opening $service with ingredients...',
-            );
+            _orderFrom(service);
           },
         ),
       );
@@ -904,6 +984,42 @@ class _SwipeDeckScreenState extends State<SwipeDeckScreen> {
           onAdd: _addMealToPlan,
           onClose: () =>
               context.read<AppStateCubit>().setMealPlannerSheet(null),
+        ),
+      );
+    }
+
+    // Active tag filter — tap to clear.
+    final tag = _tagFilter;
+    if (tag != null) {
+      controls.add(
+        Positioned(
+          top: (scale.isTiny ? 82 : 118) + 34,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: GestureDetector(
+              onTap: () => _setTagFilter(null),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(100),
+                  border: Border.all(color: _accentColor.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '#$tag',
+                      style: TextStyle(color: _accentColor, fontSize: 12, fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.close_rounded, size: 14, color: Colors.white),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       );
     }

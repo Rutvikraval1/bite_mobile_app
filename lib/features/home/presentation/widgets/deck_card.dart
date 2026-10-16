@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/state/app_state.dart';
+import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/bite_scale.dart';
 import '../../../../core/widgets/animations/entrance.dart';
@@ -1563,6 +1564,10 @@ class _FoodActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The lock only marks Meal Planner as a Premium feature for free users.
+    final isPremium = context.select<AppStateCubit, bool>(
+      (c) => c.state.isPremium,
+    );
     return Row(
       children: [
         _RoundIconButton(
@@ -1652,9 +1657,11 @@ class _FoodActions extends StatelessWidget {
                           color: AppColors.amber,
                         ),
                       ),
-                      const SizedBox(width: 3),
-                      const Icon(Icons.lock_outline_rounded,
-                          size: 10, color: AppColors.amber),
+                      if (!isPremium) ...[
+                        const SizedBox(width: 3),
+                        const Icon(Icons.lock_outline_rounded,
+                            size: 10, color: AppColors.amber),
+                      ],
                     ],
             ),
           ),

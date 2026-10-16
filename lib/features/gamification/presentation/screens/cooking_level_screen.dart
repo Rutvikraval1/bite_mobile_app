@@ -571,7 +571,9 @@ class _MyKitchenPanel extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      next == null
+                      items.isEmpty
+                          ? 'Your cooking stats'
+                          : next == null
                           ? 'Every kitchen item unlocked — legendary!'
                           : '${next.min - xp} XP until your '
                                 '${next.rewardEmoji ?? ''} ${next.rewardName}',
@@ -584,25 +586,29 @@ class _MyKitchenPanel extends StatelessWidget {
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.amber.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(100),
-                  border: Border.all(
-                    color: AppColors.amber.withValues(alpha: 0.2),
+              if (items.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.amber.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(100),
+                    border: Border.all(
+                      color: AppColors.amber.withValues(alpha: 0.2),
+                    ),
+                  ),
+                  child: Text(
+                    '$unlocked/${items.length}',
+                    style: const TextStyle(
+                      color: AppColors.amber,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'Inter',
+                    ),
                   ),
                 ),
-                child: Text(
-                  '$unlocked/${items.length}',
-                  style: const TextStyle(
-                    color: AppColors.amber,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'Inter',
-                  ),
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -622,47 +628,48 @@ class _MyKitchenPanel extends StatelessWidget {
           const SizedBox(height: 14),
 
           // ── Kitchen items unlocked by tier ──
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              for (final item in items)
-                Builder(
-                  builder: (context) {
-                    final has = xp >= item.min;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 6,
-                        horizontal: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: has
-                            ? const Color(0x144CAF50)
-                            : Colors.white.withValues(alpha: 0.03),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: has
-                              ? const Color(0x264CAF50)
-                              : Colors.white.withValues(alpha: 0.04),
+          if (items.isNotEmpty)
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final item in items)
+                  Builder(
+                    builder: (context) {
+                      final has = xp >= item.min;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 6,
+                          horizontal: 8,
                         ),
-                      ),
-                      child: Text(
-                        has
-                            ? '${item.rewardEmoji ?? ''} ${item.rewardName}'
-                            : '🔒 ${item.min} XP',
-                        style: TextStyle(
+                        decoration: BoxDecoration(
                           color: has
-                              ? const Color(0xFF4CAF50)
-                              : AppColors.muted,
-                          fontSize: 10,
-                          fontFamily: 'Inter',
+                              ? const Color(0x144CAF50)
+                              : Colors.white.withValues(alpha: 0.03),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: has
+                                ? const Color(0x264CAF50)
+                                : Colors.white.withValues(alpha: 0.04),
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                ),
-            ],
-          ),
+                        child: Text(
+                          has
+                              ? '${item.rewardEmoji ?? ''} ${item.rewardName}'
+                              : '🔒 ${item.min} XP',
+                          style: TextStyle(
+                            color: has
+                                ? const Color(0xFF4CAF50)
+                                : AppColors.muted,
+                            fontSize: 10,
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
           const SizedBox(height: 14),
 
           // ── Recent cooks ──

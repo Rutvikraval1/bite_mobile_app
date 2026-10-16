@@ -48,6 +48,8 @@ abstract interface class ContentRepository {
   Future<List<SavedItem>> fetchSavedItems(String userId);
 
   /// Save a card for the current user. No-op if already saved.
+  /// On success, `data` is true when a new row was written and false when
+  /// the item was already in `saved_items`.
   Future<ContentWriteResult> saveItem(
     String userId,
     BiteCard card,

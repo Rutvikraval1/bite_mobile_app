@@ -178,7 +178,7 @@ class ContentRepositoryImpl implements ContentRepository {
           .eq('item_type', itemType)
           .eq('item_id', card.id)
           .maybeSingle();
-      if (existing != null) return const ContentWriteResult.ok();
+      if (existing != null) return const ContentWriteResult.ok(false);
 
       await _client.from(TableNames.savedItems).insert({
         'user_id': userId,
@@ -189,7 +189,11 @@ class ContentRepositoryImpl implements ContentRepository {
         'image_url': card.image,
         'cuisine': card.cuisine,
       });
-      return const ContentWriteResult.ok();
+      return const ContentWriteResult.ok(true);
+    } on PostgrestException catch (e) {
+      // Unique (user_id, item_type, item_id): a parallel save won the race.
+      if (e.code == '23505') return const ContentWriteResult.ok(false);
+      return ContentWriteResult.failure(e.toString());
     } catch (e) {
       return ContentWriteResult.failure(e.toString());
     }

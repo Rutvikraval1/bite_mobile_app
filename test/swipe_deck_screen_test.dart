@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bite/core/router/app_screen.dart';
 import 'package:bite/core/router/flow_cubit.dart';
+import 'package:bite/core/services/toast_service.dart';
 import 'package:bite/core/state/app_state_cubit.dart';
 import 'package:bite/features/auth/domain/entities/auth_result.dart';
 import 'package:bite/features/auth/domain/entities/profile.dart';
@@ -221,7 +222,11 @@ class _FakeContentRepo implements ContentRepository {
     BiteCard card,
     String itemType,
   ) async =>
-      ContentWriteResult.ok();
+      // true = newly saved, false = already in saved_items.
+      ContentWriteResult.ok(savedIds.add(card.id));
+
+  /// Ids already in the fake `saved_items`.
+  static final Set<int> savedIds = {};
 
   @override
   Future<ContentWriteResult> removeSavedItem(String userId, String id) async =>
@@ -382,5 +387,79 @@ void main() {
     expect(flow.state.screen, AppScreen.premium);
 
     await _flushPendingTimers(tester);
+  });
+
+  testWidgets('card buttons get taps: ⭐ favorite, + Meal, Order',
+      (tester) async {
+    await _pumpDeck(tester);
+
+    final ctx = tester.element(find.byType(SwipeDeckScreen));
+    final app = BlocProvider.of<AppStateCubit>(ctx);
+
+    // ⭐ super-favorite: +15 XP (it used to open Recipe Detail instead).
+    final before = app.state.xp;
+    await tester.tap(find.text('⭐').first);
+    await tester.pump();
+    expect(app.state.xp, before + 15);
+    await tester.pump(const Duration(seconds: 2));
+
+    // + Meal (premium): opens the meal planner sheet.
+    app.hydrateFromProfile(const Profile(id: 'u1', isPremium: true));
+    await tester.pump();
+    expect(find.byIcon(Icons.lock_outline_rounded), findsNothing,
+        reason: 'no lock for premium users');
+    await tester.tap(find.text('Meal').first);
+    await tester.pump();
+    expect(app.state.mealPlannerSheet, isNotNull);
+    app.setMealPlannerSheet(null);
+    await tester.pump();
+
+    // Order: opens the grocery service picker.
+    await tester.tap(find.text('Order').first);
+    await tester.pump();
+    expect(find.text('Instacart'), findsOneWidget);
+
+    await _flushPendingTimers(tester);
+  });
+
+  group('save messages reflect the database result', () {
+    Future<List<String>> swipeUpAndCollect(
+      WidgetTester tester, {
+      String? userId,
+    }) async {
+      final toasts = <String>[];
+      final sub = ToastService.instance.stream.listen(toasts.add);
+      addTearDown(sub.cancel);
+      await _pumpDeck(tester);
+      final ctx = tester.element(find.byType(SwipeDeckScreen));
+      if (userId != null) {
+        await BlocProvider.of<ContentCubit>(ctx).bind(userId);
+      }
+      await tester.drag(find.byType(SwipeDeckScreen), const Offset(0, -130));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await _flushPendingTimers(tester);
+      await tester.pump(const Duration(seconds: 10));
+      return toasts;
+    }
+
+    testWidgets('signed out → sign-in message', (tester) async {
+      final toasts = await swipeUpAndCollect(tester);
+      expect(toasts, contains(startsWith('🔐 Sign in to save')));
+    });
+
+    testWidgets('new save → "Saved … to your Saved tab"', (tester) async {
+      _FakeContentRepo.savedIds.clear();
+      final toasts = await swipeUpAndCollect(tester, userId: 'u1');
+      expect(toasts, contains('🔖 Saved Pesto Pasta to your Saved tab · +8 XP'));
+    });
+
+    testWidgets('already saved → "already in your Saved"', (tester) async {
+      _FakeContentRepo.savedIds
+        ..clear()
+        ..add(1);
+      final toasts = await swipeUpAndCollect(tester, userId: 'u1');
+      expect(toasts, contains('🔖 Pesto Pasta is already in your Saved'));
+    });
   });
 }
