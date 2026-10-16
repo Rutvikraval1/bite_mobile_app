@@ -8,7 +8,7 @@ import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../auth/presentation/blocs/auth_cubit.dart';
-import '../../data/mock_profile_data.dart';
+import '../../data/impact_repository.dart';
 
 class _Tier {
   const _Tier({
@@ -97,9 +97,32 @@ class PremiumScreen extends StatefulWidget {
 class _PremiumScreenState extends State<PremiumScreen> {
   String? _selectedTier;
   bool _annual = true;
+  final _impactRepo = ImpactRepository();
+  List<Charity> _charities = const [];
   int? _selectedCharity;
   bool _showCharity = false;
   bool _subscribing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCharities();
+  }
+
+  /// Charities come from the `charities` table; the current choice from
+  /// `profiles.charity_id` (0 in the sheet = "No donation").
+  Future<void> _loadCharities() async {
+    try {
+      final results = await Future.wait([_impactRepo.fetchCharities(), _impactRepo.fetchMyCharityId()]);
+      if (!mounted) return;
+      setState(() {
+        _charities = results[0] as List<Charity>;
+        _selectedCharity ??= results[1] as int?;
+      });
+    } catch (_) {
+      // Sheet then only offers "No donation"; subscribing still works.
+    }
+  }
 
   String _tierName(String? id) {
     for (final t in _tiers) {
@@ -108,7 +131,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     return 'Premium';
   }
 
-  Future<void> _confirmSubscribe() async {
+  Future<void> _confirmSubscribe({bool saveCharity = true}) async {
     final tierId = _selectedTier;
     if (tierId == null) return;
     setState(() => _subscribing = true);
@@ -120,6 +143,10 @@ class _PremiumScreenState extends State<PremiumScreen> {
     if (userId != null) {
       try {
         await authCubit.updateProfile({'is_premium': true, 'user_tier': tierId});
+        final charity = _selectedCharity;
+        if (saveCharity && charity != null) {
+          await _impactRepo.setMyCharity(charity == 0 ? null : charity);
+        }
       } catch (_) {
         // A failed write is treated like a failure result: local state below
         // still applies, and the spinner must not get stuck on.
@@ -292,11 +319,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
             ),
             if (_showCharity)
               _CharitySheet(
+                charities: _charities,
                 selectedCharity: _selectedCharity,
                 subscribing: _subscribing,
                 onSelect: (id) => setState(() => _selectedCharity = id),
                 onConfirm: _confirmSubscribe,
-                onSkip: _confirmSubscribe,
+                onSkip: () => _confirmSubscribe(saveCharity: false),
               ),
           ],
         ),
@@ -450,6 +478,7 @@ class _TierCard extends StatelessWidget {
 
 class _CharitySheet extends StatelessWidget {
   const _CharitySheet({
+    required this.charities,
     required this.selectedCharity,
     required this.subscribing,
     required this.onSelect,
@@ -457,6 +486,7 @@ class _CharitySheet extends StatelessWidget {
     required this.onSkip,
   });
 
+  final List<Charity> charities;
   final int? selectedCharity;
   final bool subscribing;
   final ValueChanged<int> onSelect;
@@ -493,7 +523,10 @@ class _CharitySheet extends StatelessWidget {
                       style: TextStyle(color: AppColors.muted, fontSize: 12),
                     ),
                     const SizedBox(height: 20),
-                    for (final c in MockProfileData.charities)
+                    for (final c in [
+                      ...charities.map((c) => (id: c.id, emoji: c.emoji, name: c.name, desc: c.desc)),
+                      (id: 0, emoji: '🚫', name: 'No donation', desc: 'Keep my full payment'),
+                    ])
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: GestureDetector(

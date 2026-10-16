@@ -1,21 +1,23 @@
 import 'dart:math' as math;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/extensions/context_extensions.dart';
 import '../../../../core/router/flow_cubit.dart';
+import '../../../../core/state/app_state_cubit.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/animations/entrance.dart';
 import '../../../../core/widgets/animations/loops.dart';
 import '../../../../core/widgets/glass.dart';
-import '../../data/mock_profile_data.dart';
-
-const _dailyCap = 50;
+import '../../data/competition_repository.dart';
 
 /// Head-to-head Elo-ranked voting for a competition's submissions, plus a
-/// live leaderboard. Ports `EloVotingScreen`. No voting table exists yet —
-/// Elo scores are computed and held locally for the session.
+/// live leaderboard. Ports `EloVotingScreen`. Entries come from
+/// `competition_entries` (`elo_board` RPC); each vote goes through
+/// `cast_elo_vote`, which updates both Elo scores, enforces the daily cap
+/// and awards XP on the server.
 class EloVotingScreen extends StatefulWidget {
   const EloVotingScreen({super.key});
 
@@ -24,74 +26,130 @@ class EloVotingScreen extends StatefulWidget {
 }
 
 class _EloVotingScreenState extends State<EloVotingScreen> {
+  final _repo = CompetitionRepository();
+  final _rng = math.Random();
+  final _comp = CompetitionSelection.instance.current;
+
   int _matchIndex = 0;
   String? _chosen; // "left" | "right"
   bool _transitioning = false;
-  final Map<int, int> _scores = {};
-  int _votesCount = 0;
   bool _showLeaderboard = false;
   String? _slideOut;
 
-  // Built once instead of on every build/vote.
-  late final List<List<EloEntry>> _matchups = _buildMatchups();
+  List<EloEntry> _entries = const [];
+  int _votesCount = 0;
+  int _dailyCap = 50;
+  bool _loading = true;
+  String? _error;
+  List<EloEntry>? _pair;
 
-  List<List<EloEntry>> _buildMatchups() {
-    final entries = EloVotingData.entries;
-    final pairs = <List<EloEntry>>[];
-    for (var i = 0; i + 1 < entries.length; i += 2) {
-      pairs.add([entries[i], entries[i + 1]]);
-    }
-    return pairs;
+  /// Entries the user can vote on (not their own).
+  List<EloEntry> get _votable => _entries.where((e) => !e.mine).toList();
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
   }
 
-  void _handleVote(String side) {
-    if (_transitioning) return;
+  Future<void> _load() async {
+    final comp = _comp;
+    if (comp == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    try {
+      final board = await _repo.fetchEloBoard(comp.id);
+      if (!mounted) return;
+      setState(() {
+        _entries = board.entries;
+        _votesCount = board.votesToday;
+        _dailyCap = board.dailyCap;
+        _loading = false;
+        _pair = _nextPair();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = CompetitionRepository.messageFor(e);
+      });
+    }
+  }
+
+  /// A random pair of two different votable entries, avoiding repeating
+  /// the previous pair when possible.
+  List<EloEntry>? _nextPair() {
+    final pool = _votable;
+    if (pool.length < 2) return null;
+    final prev = _pair?.map((e) => e.id).toSet() ?? const <String>{};
+    for (var attempt = 0; attempt < 6; attempt++) {
+      final a = _rng.nextInt(pool.length);
+      var b = _rng.nextInt(pool.length - 1);
+      if (b >= a) b++;
+      final pair = [pool[a], pool[b]];
+      if (pool.length <= 2 || !(prev.contains(pair[0].id) && prev.contains(pair[1].id))) return pair;
+    }
+    return [pool[0], pool[1]];
+  }
+
+  void _setElo(String id, int elo) {
+    _entries = [for (final e in _entries) e.id == id ? e.withElo(elo) : e];
+  }
+
+  Future<void> _handleVote(String side) async {
+    final pair = _pair;
+    if (_transitioning || pair == null) return;
     if (_votesCount >= _dailyCap) {
       context.showToast('🏆 Daily rating cap reached! Come back tomorrow for more points.');
       return;
     }
-    final matchups = _matchups;
-    if (matchups.isEmpty) return;
-    final pair = matchups[_matchIndex % matchups.length];
-    final left = pair[0];
-    final right = pair[1];
-    final winner = side == 'left' ? left : right;
-    final loser = side == 'left' ? right : left;
+    final winner = side == 'left' ? pair[0] : pair[1];
+    final loser = side == 'left' ? pair[1] : pair[0];
     final loserSide = side == 'left' ? 'right' : 'left';
-    final winnerElo = (_scores[winner.id] ?? winner.elo).toDouble();
-    final loserElo = (_scores[loser.id] ?? loser.elo).toDouble();
-    final eW = 1 / (1 + math.pow(10, (loserElo - winnerElo) / 400));
-    final delta = (32 * (1 - eW)).round();
 
     setState(() {
       _chosen = side;
       _transitioning = true;
-      _scores[winner.id] = (_scores[winner.id] ?? winner.elo) + delta;
-      _scores[loser.id] = (_scores[loser.id] ?? loser.elo) - delta;
-      _votesCount++;
       _slideOut = loserSide;
     });
 
-    if (_votesCount % 5 == 0) {
-      context.showToast('⭐ +25 pts earned! ($_votesCount/$_dailyCap daily ratings)');
+    try {
+      final res = await _repo.castEloVote(winnerId: winner.id, loserId: loser.id);
+      if (!mounted) return;
+      if (res.capped) {
+        setState(() => _votesCount = res.votesToday);
+        context.showToast('🏆 Daily rating cap reached! Come back tomorrow for more points.');
+      } else {
+        setState(() {
+          if (res.winnerElo != null) _setElo(winner.id, res.winnerElo!);
+          if (res.loserElo != null) _setElo(loser.id, res.loserElo!);
+          _votesCount = res.votesToday;
+        });
+        if (res.newXp != null) context.read<AppStateCubit>().setXp(res.newXp!);
+        if (_votesCount % 5 == 0) {
+          context.showToast('⭐ +25 XP earned! ($_votesCount/$_dailyCap daily ratings)');
+        }
+      }
+    } catch (e) {
+      if (mounted) context.showToast(CompetitionRepository.messageFor(e));
     }
 
-    Future<void>.delayed(const Duration(milliseconds: 700), () {
-      if (!mounted) return;
-      setState(() {
-        _chosen = null;
-        _slideOut = null;
-        _transitioning = false;
-        _matchIndex++;
-      });
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    setState(() {
+      _chosen = null;
+      _slideOut = null;
+      _transitioning = false;
+      _matchIndex++;
+      _pair = _nextPair();
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final matchups = _matchups;
-    if (matchups.isEmpty) return const Scaffold(backgroundColor: AppColors.bgDark);
-    final pair = matchups[_matchIndex % matchups.length];
+    final comp = _comp;
+    final pair = _pair;
 
     return Scaffold(
       backgroundColor: AppColors.bgDark,
@@ -109,13 +167,18 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
                   Expanded(
                     child: Column(
                       children: [
-                        const Text('🌮 Taco Challenge', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                        Text(
+                          comp == null ? 'Rate Submissions' : '${comp.emoji} ${comp.title}',
+                          textAlign: TextAlign.center,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                        ),
                         RichText(
                           text: TextSpan(
                             style: TextStyle(color: AppColors.muted, fontSize: 11),
                             children: const [
-                              TextSpan(text: 'Pick the better taco · '),
-                              TextSpan(text: '5 pts/vote', style: TextStyle(color: AppColors.amber)),
+                              TextSpan(text: 'Pick the better dish · '),
+                              TextSpan(text: '5 XP/vote', style: TextStyle(color: AppColors.amber)),
                             ],
                           ),
                         ),
@@ -135,13 +198,54 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Text('MATCHUP #${_matchIndex + 1}', style: TextStyle(color: AppColors.muted, fontSize: 11, letterSpacing: 2)),
-            ),
+            if (!_showLeaderboard && pair != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text('MATCHUP #${_matchIndex + 1}', style: TextStyle(color: AppColors.muted, fontSize: 11, letterSpacing: 2)),
+              ),
             Expanded(
-              child: _showLeaderboard ? _buildLeaderboard() : _buildVoting(pair),
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator(color: AppColors.amber, strokeWidth: 2))
+                  : _error != null
+                      ? _message('⚠️', "Couldn't load entries", _error!)
+                      : comp == null
+                          ? _message('🏆', 'No competition selected', 'Open a competition and tap Rate Submissions.')
+                          : _showLeaderboard
+                              ? _buildLeaderboard()
+                              : pair == null
+                                  ? _message(
+                                      '🍽',
+                                      'Not enough entries yet',
+                                      _entries.isEmpty
+                                          ? 'Nobody has entered this competition yet. Check back soon!'
+                                          : 'There need to be at least two entries from other cooks to vote.',
+                                      showLeaderboard: _entries.isNotEmpty,
+                                    )
+                                  : _buildVoting(pair),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _message(String emoji, String title, String body, {bool showLeaderboard = false}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 48)),
+            const SizedBox(height: 12),
+            Text(title, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            Text(body, textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted, fontSize: 13, height: 1.5)),
+            if (showLeaderboard)
+              TextButton(
+                onPressed: () => setState(() => _showLeaderboard = true),
+                child: const Text('🏆 View Leaderboard', style: TextStyle(color: AppColors.amber)),
+              ),
           ],
         ),
       ),
@@ -188,7 +292,7 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
                 text: TextSpan(
                   style: TextStyle(color: AppColors.muted, fontSize: 12),
                   children: const [
-                    TextSpan(text: 'Tap the taco that looks better — your vote uses '),
+                    TextSpan(text: 'Tap the dish that looks better — your vote uses '),
                     TextSpan(text: 'Elo ranking', style: TextStyle(color: AppColors.amber, fontWeight: FontWeight.w600)),
                   ],
                 ),
@@ -196,7 +300,7 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text(
-                  '$_votesCount vote${_votesCount != 1 ? 's' : ''} cast · ${_matchups.length * 2} entries · ${_matchups.length} matchups per round',
+                  '$_votesCount vote${_votesCount != 1 ? 's' : ''} today · ${_entries.length} entries',
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.2), fontSize: 11),
                 ),
               ),
@@ -234,7 +338,7 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
   }
 
   Widget _buildLeaderboard() {
-    final leaderboard = [...EloVotingData.entries]..sort((a, b) => (_scores[b.id] ?? b.elo).compareTo(_scores[a.id] ?? a.elo));
+    final leaderboard = [..._entries]..sort((a, b) => b.elo.compareTo(a.elo));
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
       children: [
@@ -255,14 +359,16 @@ class _EloVotingScreenState extends State<EloVotingScreen> {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 16),
           child: Text(
-            'Rankings update in real-time based on community votes using the Elo rating system — same method used in chess rankings.',
+            leaderboard.isEmpty
+                ? 'No entries yet.'
+                : 'Rankings update with every community vote using the Elo rating system — same method used in chess rankings.',
             style: TextStyle(color: AppColors.muted, fontSize: 12, height: 1.5),
           ),
         ),
         for (var rank = 0; rank < leaderboard.length; rank++)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: _LeaderboardRow(entry: leaderboard[rank], rank: rank, elo: _scores[leaderboard[rank].id] ?? leaderboard[rank].elo),
+            child: _LeaderboardRow(entry: leaderboard[rank], rank: rank, elo: leaderboard[rank].elo),
           ),
         Container(
           margin: const EdgeInsets.only(top: 8),
@@ -340,7 +446,16 @@ class _CardSide extends StatelessWidget {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                Opacity(opacity: 0.4, child: Text(entry.emoji, style: const TextStyle(fontSize: 64))),
+                if (entry.imageUrl != null && entry.imageUrl!.isNotEmpty)
+                  Positioned.fill(
+                    child: CachedNetworkImage(
+                      imageUrl: entry.imageUrl!,
+                      fit: BoxFit.cover,
+                      errorWidget: (_, _, _) => Center(child: Opacity(opacity: 0.4, child: Text(entry.emoji, style: const TextStyle(fontSize: 64)))),
+                    ),
+                  )
+                else
+                  Opacity(opacity: 0.4, child: Text(entry.emoji, style: const TextStyle(fontSize: 64))),
                 if (isChosen)
                   PopIn(
                     child: Container(
@@ -361,8 +476,8 @@ class _CardSide extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(entry.name, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700, height: 1.2)),
-                        Text(entry.creator, style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                        Text(entry.title, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700, height: 1.2)),
+                        Text(entry.creator.handle, style: TextStyle(color: AppColors.muted, fontSize: 11)),
                       ],
                     ),
                   ),
@@ -419,8 +534,8 @@ class _LeaderboardRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(entry.name, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
-                Text(entry.creator, style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                Text(entry.title, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                Text(entry.creator.handle, style: TextStyle(color: AppColors.muted, fontSize: 11)),
               ],
             ),
           ),
